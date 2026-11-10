@@ -11,7 +11,7 @@ A personal, phone-friendly web app: look at satellite imagery, drop points, get 
 - Your points and map position are saved on the phone automatically.
 
 Satellite imagery: Esri World Imagery (free, no API key). Map library: Leaflet 1.9.4 (bundled in `vendor/`).
-Area is computed on the WGS84 sphere (same method as Leaflet.draw / OpenLayers), accurate to well under 1% for fields and lots.
+Area is computed with the WGS84 ellipsoid's local radius (spherical excess), matching the exact ellipsoidal area to ~0.01% for field- and farm-sized shapes. In practice your accuracy is limited by how precisely you place points, not the math.
 
 ## Put it on your phone
 

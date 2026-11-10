@@ -105,17 +105,30 @@
   let locked = false;
 
   // ---------- Geometry ----------
-  const R = 6378137; // WGS84 equatorial radius in metres
+  const A_WGS84 = 6378137, E2_WGS84 = 0.00669437999014; // WGS84 ellipsoid
   const rad = d => d * Math.PI / 180;
 
-  // Area of a polygon on the sphere (same method as Leaflet.draw / OpenLayers).
+  // Gaussian radius of curvature sqrt(M*N) of the WGS84 ellipsoid at a latitude:
+  // the radius of the sphere that best matches the real Earth's surface locally.
+  function localRadius(latDeg) {
+    const s = Math.sin(rad(latDeg)), w = Math.sqrt(1 - E2_WGS84 * s * s);
+    const M = A_WGS84 * (1 - E2_WGS84) / (w * w * w), N = A_WGS84 / w;
+    return Math.sqrt(M * N);
+  }
+
+  // Polygon area via spherical excess (as in Leaflet.draw / OpenLayers), but scaled
+  // with the ellipsoid's local radius instead of a fixed one. Using the equatorial
+  // radius would be off by up to ~0.7% depending on latitude; this is ~0.01%
+  // for anything field- or farm-sized.
   function geodesicArea(pts) {
     if (pts.length < 3) return 0;
-    let a = 0;
+    let a = 0, lat = 0;
     for (let i = 0; i < pts.length; i++) {
       const p1 = pts[i], p2 = pts[(i + 1) % pts.length];
       a += rad(p2.lng - p1.lng) * (2 + Math.sin(rad(p1.lat)) + Math.sin(rad(p2.lat)));
+      lat += p1.lat;
     }
+    const R = localRadius(lat / pts.length);
     return Math.abs(a * R * R / 2);
   }
 
