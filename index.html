@@ -55,17 +55,41 @@
     justify-content: center; font-size: 10px; font-weight: 700; color: #111; }
   .vtx.first { background: var(--ok); }
   .vtx.mark { background: var(--danger); color: #fff; }
-  #sheet { position: fixed; inset: 0; z-index: 1200; background: rgba(0,0,0,.5);
+  #sheet, #places { position: fixed; inset: 0; z-index: 1200; background: rgba(0,0,0,.5);
     display: flex; align-items: flex-end; }
-  #sheet[hidden] { display: none; }
-  #sheet .card { width: 100%; background: #111827; border-radius: 18px 18px 0 0;
+  #sheet[hidden], #places[hidden] { display: none; }
+  #sheet .card, #places .card { width: 100%; max-height: 92vh; overflow-y: auto; background: #111827; border-radius: 18px 18px 0 0;
     padding: 12px 12px max(12px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; }
-  #sheet button { background: #1f2937; color: var(--fg); border: 0; border-radius: 12px; padding: 14px;
+  #sheet button, #places .card > button { background: #1f2937; color: var(--fg); border: 0; border-radius: 12px; padding: 13px 14px;
     font-size: 16px; text-align: left; }
-  #sheet button small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  #sheet button small, #places button small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
   #sheet button.danger { color: #fca5a5; }
   #sheet button:disabled { opacity: .4; }
-  #sheet button[data-act="close"] { text-align: center; background: transparent; }
+  #sheet button[data-act="close"], #places .card > button.closebtn { text-align: center; background: transparent; }
+  .phead { padding: 2px 4px 6px; font-size: 18px; }
+  .phead small { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; }
+  #placeList { display: flex; flex-direction: column; gap: 6px; }
+  .prow { display: flex; align-items: center; gap: 6px; background: #1f2937; border-radius: 12px; padding: 4px 6px 4px 12px; }
+  .prow.cur { outline: 2px solid var(--accent); }
+  .prow .pmain { flex: 1; padding: 8px 0; min-width: 0; }
+  .prow .pmain b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prow .pmain small { color: var(--muted); font-size: 12px; }
+  .prow button { background: #374151; border: 0; border-radius: 10px; font-size: 18px; padding: 8px 10px; }
+  .empty { color: var(--muted); font-size: 14px; padding: 8px 4px; margin: 0; }
+  #areaErr { font-size: 12px; color: var(--muted); margin-top: 1px; }
+  #precise { position: fixed; left: 8px; right: 8px; bottom: calc(76px + env(safe-area-inset-bottom)); z-index: 1150;
+    background: #0b1220; border: 2px solid #38bdf8; border-radius: 14px; padding: 12px; font-size: 14px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.6); display: flex; flex-direction: column; gap: 8px; }
+  #precise[hidden] { display: none; }
+  #precise .pbar { height: 6px; background: #1f2937; border-radius: 3px; overflow: hidden; }
+  #pfill { height: 100%; width: 0; background: #38bdf8; transition: width .4s linear; }
+  #pstat { color: #cbd5e1; font-size: 13px; line-height: 1.4; }
+  #pstat .muted { color: var(--muted); }
+  .pbtns { display: flex; gap: 8px; }
+  .pbtns button { flex: 1; border: 0; border-radius: 10px; padding: 12px; font-size: 15px; background: #374151; color: var(--fg); }
+  #pSave { background: #38bdf8; color: #0b1220; font-weight: 700; }
+  #pSave:disabled { opacity: .4; }
+  #bar button { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; touch-action: manipulation; }
   .me { width: 16px; height: 16px; border-radius: 50%; background: #3b82f6; border: 3px solid #fff;
     box-shadow: 0 0 0 2px #3b82f6; }
   .leaflet-control-attribution { font-size: 9px; }
@@ -98,6 +122,7 @@
   <div id="stats">
     <div id="areaMain">Tap the map to add points</div>
     <div id="areaAlt"></div>
+    <div id="areaErr"></div>
     <div id="partsList"></div>
     <div id="perim"></div>
     <div id="walkInfo"></div>
@@ -122,9 +147,27 @@
   <button id="btnDivExit">Done</button>
 </div>
 
+<div id="precise" hidden>
+  <div><b>🎯 Precise mark</b>: stand still while GPS is averaged</div>
+  <div class="pbar"><div id="pfill"></div></div>
+  <div id="pstat">Waiting for GPS…</div>
+  <div class="pbtns"><button id="pCancel">Cancel</button><button id="pSave" disabled>Save point now</button></div>
+</div>
+
+<div id="places" class="sheetwrap" hidden>
+  <div class="card">
+    <div class="phead"><b>📚 My places</b><small id="persistInfo"></small></div>
+    <div id="placeList"></div>
+    <button data-pact="backup">⬇️ Back up all places to a file <small>open the file here (☰ More → Open) to restore</small></button>
+    <button data-pact="close" class="closebtn">Close</button>
+  </div>
+</div>
+
 <div id="sheet" hidden>
   <div class="card">
-    <button data-act="saveGeo">💾 Save to phone <small>.geojson · open it here again later</small></button>
+    <button data-act="places">📚 My places <small>shapes saved in this app</small></button>
+    <button data-act="savePlace">⭐ Save to My places</button>
+    <button data-act="saveGeo">💾 Save as a file <small>.geojson in Downloads · open it here again later</small></button>
     <button data-act="saveKml">🌍 Save for Google Earth <small>.kml</small></button>
     <button data-act="open">📂 Open a saved file <small>.geojson, .kml, or .gpx from a GPS logger</small></button>
     <button data-act="divide">✂️ Divide into parts <small>tap, mark or walk lines across the parcel</small></button>
@@ -272,6 +315,24 @@
     return Math.hypot(rad(b.lat - a.lat) * M, rad(b.lng - a.lng) * N * Math.cos(latm));
   }
 
+  // How much the area could be off, from how precisely each corner is known.
+  // Android's GPS accuracy is a 68% radius (≈1.5 σ per axis); points placed by hand on
+  // the photo are taken as σ = 0.5 m. Moving corner i changes the area in proportion to
+  // the distance between its two neighbours. Returns 1 σ in m².
+  const SIGMA_TAP = 0.5;
+  function areaSigma(pts) {
+    const n = pts.length;
+    if (n < 3) return 0;
+    const pr = localProj(pts[0]), q = pts.map(pr.fwd);
+    let v = 0;
+    for (let i = 0; i < n; i++) {
+      const a = q[(i - 1 + n) % n], b = q[(i + 1) % n];
+      const s = pts[i].acc != null ? pts[i].acc / 1.515 : SIGMA_TAP;
+      v += s * s * ((b.x - a.x) ** 2 + (b.y - a.y) ** 2) / 4;
+    }
+    return Math.sqrt(v);
+  }
+
   function perimeter(pts) {
     if (pts.length < 2) return 0;
     let d = 0;
@@ -321,15 +382,16 @@
   // ---------- Points ----------
   // Points are Leaflet LatLngs with optional extras: acc (GPS accuracy in m, when the
   // point came from GPS) and mark (placed with the 📌 Mark button; never simplified away).
-  function mkPt(lat, lng, acc, mark) {
+  function mkPt(lat, lng, acc, mark, avgN, avgS) {
     const p = L.latLng(lat, lng);
     if (acc != null && isFinite(acc)) p.acc = acc;
     if (mark) p.mark = true;
+    if (avgN) { p.avgN = avgN; p.avgS = avgS || 0; } // a Precise Mark: averaged from avgN readings over avgS seconds
     return p;
   }
   // (function declarations, so they work in the setup code above that restores saved points)
-  function ser(p) { return [p.lat, p.lng, p.acc != null ? p.acc : null, p.mark ? 1 : 0]; }
-  function deser(a) { return mkPt(a[0], a[1], a[2], a[3]); }
+  function ser(p) { return [p.lat, p.lng, p.acc != null ? p.acc : null, p.mark ? 1 : 0, p.avgN || 0, p.avgS || 0]; }
+  function deser(a) { return mkPt(a[0], a[1], a[2], a[3], a[4], a[5]); }
 
   // ---------- Rendering ----------
   function vertexIcon(i, p) {
@@ -355,7 +417,8 @@
         const div = L.DomUtil.create('div');
         div.innerHTML = `<div style="margin-bottom:6px"><b>Point ${i + 1}</b>${q.mark ? ' 📌' : ''}<br>` +
           `<small>${q.lat.toFixed(7)}, ${q.lng.toFixed(7)}` +
-          (q.acc != null ? `<br>GPS accuracy ±${q.acc.toFixed(1)} m` : '') + '</small></div>';
+          (q.acc != null ? `<br>GPS accuracy ±${q.acc.toFixed(1)} m` : '') +
+          (q.avgN ? `<br>🎯 averaged ${q.avgN} readings over ${Math.round(q.avgS)} s` : '') + '</small></div>';
         const b = L.DomUtil.create('button', 'popbtn', div);
         b.textContent = 'Delete point';
         L.DomEvent.on(b, 'click', ev => { L.DomEvent.stop(ev); map.closePopup(); points.splice(i, 1); changed(); });
@@ -436,7 +499,11 @@
         : pts.length === 0 ? 'Tap the map to add points'
         : `${pts.length} point${pts.length > 1 ? 's' : ''} &middot; need ${3 - pts.length} more`;
       document.getElementById('areaAlt').textContent = '';
+      document.getElementById('areaErr').textContent = '';
     } else {
+      const e95 = 1.96 * areaSigma(pts), fromGps = pts.some(p => p.acc != null);
+      document.getElementById('areaErr').textContent =
+        `± ${fmt(u.f(e95), u.d)} ${u.name} (±${fmt(100 * e95 / area, 1)}%) likely range, from ${fromGps ? 'GPS accuracy' : 'tap precision'}`;
       main.innerHTML = `${walk && walk.target === 'outline' ? '≈ ' : ''}${fmt(u.f(area), u.d)} ${u.name}<small>tap to change units</small>`;
       document.getElementById('areaAlt').textContent = UNITS
         .filter((_, i) => i !== unitIdx && i < 4)
@@ -455,6 +522,7 @@
       const marks = t.filter(p => p.mark).length;
       wi.textContent = (walk.target === 'divider' ? '✂️ dividing line · ' : '') + `🚶 ⏱ ${fmtTime(Date.now() - walk.startedAt)} · ${t.length} pts` + (marks ? ` · ${marks} 📌` : '') +
         ` · walked ${fmtDist(walk.walked)}` + (t.length > 1 && walk.target === 'outline' ? ` · start ${fmtDist(back)} away` : '') +
+        (walk.jumps ? ` · ${walk.jumps} GPS jumps ignored` : '') + (walk.paused ? ' · 🎯 averaging' : '') +
         (walk.waiting ? ` · ${walk.waiting}` : '');
     }
     document.getElementById('warn').style.display = selfIntersects(pts) ? 'block' : 'none';
@@ -472,7 +540,7 @@
     try {
       const c = map.getCenter();
       localStorage.setItem(STORE_KEY, JSON.stringify({
-        points: points.map(ser), unitIdx, dividers: dividers.map(d => d.map(ser)),
+        points: points.map(ser), unitIdx, dividers: dividers.map(d => d.map(ser)), placeId: currentPlaceId,
         view: { center: [c.lat, c.lng], zoom: map.getZoom() },
         // An unfinished walk is kept after every GPS point, so it survives the page being closed.
         walk: walk ? { target: walk.target, track: walk.track.map(ser), walked: walk.walked, maxFromStart: walk.maxFromStart, startedAt: walk.startedAt } : null,
@@ -524,6 +592,7 @@
 
   // ---------- GPS ----------
   let meMarker = null, accCircle = null, lastFix = null, watchId = null;
+  const fixListeners = new Set();
 
   function gpsError(err) {
     const why = { 1: 'location permission denied, allow it in Chrome site settings', 2: 'position unavailable', 3: 'timed out' }[err && err.code];
@@ -545,6 +614,7 @@
     }
     const a = pos.coords.accuracy;
     document.getElementById('gpsInfo').textContent = `GPS accuracy: ±${a < 10 ? a.toFixed(1) : Math.round(a)} m (${gpsQuality(a)})`;
+    fixListeners.forEach(fn => fn(lastFix));
     return lastFix;
   }
 
@@ -574,6 +644,7 @@
 
   // 📌 Mark: put a point exactly where you are right now. GPS keeps running after the
   // first mark (and always during a walk), so later marks are instant.
+  let markTips = 0;
   async function addMark() {
     let f = lastFix && Date.now() - lastFix.t < 10000 ? lastFix : null;
     if (!f) {
@@ -581,8 +652,14 @@
       try { f = await getFix(); } catch (e) { return toast(gpsError(e)); }
     }
     startWatch();
-    const p = mkPt(f.ll.lat, f.ll.lng, f.acc, true);
-    const accTxt = `±${f.acc < 10 ? f.acc.toFixed(1) : Math.round(f.acc)} m`;
+    placeMark(f);
+    if (markTips++ < 2) setTimeout(() => toast('Tip: hold 📌 to average GPS for a more precise point', 3500), 2600);
+  }
+
+  // Put a marked point (instant or averaged) wherever it belongs right now.
+  function placeMark(f) {
+    const p = mkPt(f.ll.lat, f.ll.lng, f.acc, true, f.n, f.secs);
+    const accTxt = `±${f.acc < 10 ? f.acc.toFixed(1) : Math.round(f.acc)} m` + (f.n ? `, ${f.n} readings averaged` : '');
     if (walk) {
       const t = walk.track, last = t[t.length - 1];
       if (last) walk.walked += dist(last, p);
@@ -605,7 +682,94 @@
     }
     if (navigator.vibrate) navigator.vibrate(60);
   }
-  document.getElementById('btnMark').addEventListener('click', addMark);
+
+  // ---------- Precise Mark (hold 📌) ----------
+  // Stand still while GPS readings are averaged. Readings that disagree a lot with the
+  // rest are dropped. A single reading is typically ±3–5 m; 20–30 s of averaging
+  // typically brings that to ±1–2 m.
+  const PRECISE_MAX_S = 30, PRECISE_MIN_N = 3;
+  const precisePanel = document.getElementById('precise');
+  let precise = null;
+
+  function startPrecise() {
+    if (!navigator.geolocation) return toast('GPS not available');
+    if (precise) return;
+    startWatch();
+    precise = { samples: [], t0: Date.now() };
+    if (walk) walk.paused = true;           // don't record jitter while standing still
+    precise.onFix = f => { if (f.acc <= 50) precise.samples.push({ ll: f.ll, acc: f.acc, t: f.t }); renderPrecise(); };
+    fixListeners.add(precise.onFix);
+    if (lastFix && Date.now() - lastFix.t < 2000) precise.onFix(lastFix);
+    precise.timer = setInterval(() => {
+      if ((Date.now() - precise.t0) / 1000 >= PRECISE_MAX_S) finishPrecise(true); else renderPrecise();
+    }, 500);
+    precisePanel.hidden = false;
+    renderPrecise();
+  }
+
+  function weightedMean(arr) {
+    let w = 0, la = 0, ln = 0;
+    arr.forEach(q => { const k = 1 / (q.acc * q.acc); w += k; la += k * q.ll.lat; ln += k * q.ll.lng; });
+    return L.latLng(la / w, ln / w);
+  }
+
+  function preciseResult() {
+    const all = precise.samples;
+    if (!all.length) return null;
+    let m = weightedMean(all);
+    // Drop readings far outside their own stated accuracy, then average again.
+    const kept = all.filter(q => dist(q.ll, m) <= Math.max(2 * q.acc, 3));
+    const used = kept.length >= PRECISE_MIN_N ? kept : all;
+    m = weightedMean(used);
+    const secs = (Date.now() - precise.t0) / 1000;
+    const spread = Math.sqrt(used.reduce((a, q) => a + dist(q.ll, m) ** 2, 0) / used.length);
+    const meanAcc = used.reduce((a, q) => a + q.acc, 0) / used.length;
+    // GPS error drifts slowly, so readings a second apart are not independent. Assume about
+    // one independent reading every 5 s, and never claim better than the readings' own scatter.
+    const acc = Math.max(spread, meanAcc / Math.sqrt(Math.max(1, secs / 5)), 0.3);
+    return { ll: m, acc, n: used.length, secs, meanAcc, dropped: all.length - used.length };
+  }
+
+  function renderPrecise() {
+    if (!precise) return;
+    const r = preciseResult(), secs = (Date.now() - precise.t0) / 1000;
+    document.getElementById('pfill').style.width = Math.min(100, 100 * secs / PRECISE_MAX_S) + '%';
+    document.getElementById('pstat').innerHTML = r
+      ? `${r.n} readings · ${Math.floor(secs)} s of ${PRECISE_MAX_S}` + (r.dropped ? ` · ${r.dropped} outliers dropped` : '') +
+        `<br>Accuracy now <b>±${r.acc.toFixed(1)} m</b> <span class="muted">(one reading: ±${r.meanAcc.toFixed(1)} m)</span>`
+      : 'Waiting for GPS…';
+    document.getElementById('pSave').disabled = !r || r.n < PRECISE_MIN_N;
+  }
+
+  function finishPrecise(keep) {
+    if (!precise) return;
+    const r = preciseResult();
+    clearInterval(precise.timer);
+    fixListeners.delete(precise.onFix);
+    precise = null;
+    precisePanel.hidden = true;
+    if (walk) walk.paused = false;
+    if (keep && r && r.n >= PRECISE_MIN_N) {
+      placeMark(r);
+      if (navigator.vibrate) navigator.vibrate([60, 60, 60]);
+    } else if (keep) {
+      toast('Not enough GPS readings, point not added');
+    }
+  }
+  document.getElementById('pSave').addEventListener('click', () => finishPrecise(true));
+  document.getElementById('pCancel').addEventListener('click', () => finishPrecise(false));
+
+  // Tap = instant mark. Press and hold (half a second) = Precise Mark.
+  const btnMark = document.getElementById('btnMark');
+  let holdT = null, held = false;
+  btnMark.addEventListener('pointerdown', () => {
+    held = false;
+    holdT = setTimeout(() => { held = true; if (navigator.vibrate) navigator.vibrate(30); startPrecise(); }, 500);
+  });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => btnMark.addEventListener(ev, () => clearTimeout(holdT)));
+  btnMark.addEventListener('contextmenu', e => e.preventDefault());
+  btnMark.addEventListener('click', () => { if (held) { held = false; return; } if (!precise) addMark(); });
+
 
   // ---------- Walk the boundary ----------
   // Track GPS while you walk around the parcel; a point is recorded every few metres.
@@ -615,6 +779,7 @@
   const WALK_CLOSE_MIN = 6;   // "back at the start" radius in metres (grows with poor GPS, max 15)
   const WALK_SIMPLIFY = 1.5;  // drop points that deviate < 1.5 m from a straight line
   const WALK_STALL_MS = 20000; // no GPS for this long while on screen: restart GPS
+  const WALK_MAX_SPEED = 4;     // m/s; faster "movement" than this is a GPS jump
   const trackLine = L.polyline([], { color: '#38bdf8', weight: 4, dashArray: '8 6', interactive: false }).addTo(map);
   const walkMarks = L.layerGroup().addTo(map);
   const btnWalk = document.getElementById('btnWalk');
@@ -695,7 +860,7 @@
       return toast('Walk along the dividing line from one side to the other, then tap Stop.', 4000);
     }
     if (points.length && !confirm('Start walking a new boundary? This clears the current shape (save it first from ☰ More if you want to keep it).')) return;
-    points = []; dividers = [];
+    points = []; dividers = []; currentPlaceId = null;
     beginWalk({});
     toast('Walk the boundary. Keep this screen on. Tap 📌 Mark at corners.', 4000);
   }
@@ -704,11 +869,24 @@
     const f = showFix(pos);
     if (!walk) return;
     walk.lastFixAt = Date.now();
+    if (walk.paused) return updateStats();      // standing still for a Precise Mark
     if (f.acc > WALK_MAX_ACC) {
       walk.waiting = `weak GPS (±${Math.round(f.acc)} m), waiting…`;
       return updateStats();
     }
     walk.waiting = '';
+    // Ignore jumps: a reading that would mean moving faster than a person walks or jogs.
+    // If GPS keeps disagreeing for 15 s, trust the new position (the old one was the odd one out).
+    const g = walk.lastGood;
+    if (g) {
+      const d = dist(g.ll, f.ll), dt = Math.max(0.5, (f.t - g.t) / 1000);
+      if (d / dt > WALK_MAX_SPEED && d > Math.max(8, 2 * f.acc)) {
+        if (!walk.jumpSince) walk.jumpSince = f.t;
+        if (f.t - walk.jumpSince < 15000) { walk.jumps = (walk.jumps || 0) + 1; return updateStats(); }
+      }
+    }
+    walk.jumpSince = null;
+    walk.lastGood = { ll: f.ll, t: f.t };
     const t = walk.track, last = t[t.length - 1];
     if (!last) map.setView(f.ll, Math.max(map.getZoom(), 18));
     if (last && dist(last, f.ll) < WALK_STEP) return updateStats();
@@ -786,7 +964,9 @@
     changed();
     if (points.length >= 3) {
       map.fitBounds(polygon.getBounds(), { padding: [60, 60], maxZoom: 20 });
-      toast((closed ? '✅ Loop closed!' : 'Walk stopped, shape closed for you.') + ' Save it from ☰ More.', 4000);
+      const snap = savePlace(`Walk ${stamp()}`, true);
+      toast((closed ? '✅ Loop closed!' : 'Walk stopped, shape closed for you.') +
+        (snap ? ` Saved to My places as "${snap.name}".` : ''), 4500);
     } else {
       toast('Walk stopped: not enough points for an area');
     }
@@ -816,6 +996,7 @@
   const ptProps = (p, i) => ({
     n: i + 1, lat: r8(p.lat), lng: r8(p.lng),
     gps_accuracy_m: p.acc != null ? rnd(p.acc, 1) : null, mark: !!p.mark,
+    averaged_readings: p.avgN || undefined, averaged_seconds: p.avgN ? Math.round(p.avgS) : undefined,
   });
 
   function toGeoJSON(name) {
@@ -904,12 +1085,13 @@ ${pins}
     let pts = [], name = '', ours = false, track = false, divs = [];
     if (text[0] === '{' || text[0] === '[') {
       const j = JSON.parse(text);
+      if (j.kind === 'area-calculator-places') return { places: j.features || [] };
       const feats = j.type === 'FeatureCollection' ? j.features : j.type === 'Feature' ? [j] : [{ geometry: j, properties: {} }];
       const geomOf = f => f && f.geometry;
       const role = f => (f && f.properties && f.properties.role) || '';
       const pick = types => feats.find(f => geomOf(f) && !role(f) && types.includes(geomOf(f).type));
       divs = feats.filter(f => role(f) === 'divider' && geomOf(f) && f.geometry.type === 'LineString').map(f =>
-        Array.isArray(f.properties.points) ? f.properties.points.map(q => mkPt(q.lat, q.lng, q.gps_accuracy_m, q.mark))
+        Array.isArray(f.properties.points) ? f.properties.points.map(q => mkPt(q.lat, q.lng, q.gps_accuracy_m, q.mark, q.averaged_readings, q.averaged_seconds))
           : f.geometry.coordinates.map(c => mkPt(c[1], c[0])));
       let f = pick(['Polygon', 'MultiPolygon']);
       if (f) {
@@ -928,7 +1110,7 @@ ${pins}
       ours = props.app === 'Area Calculator';
       if (ours && Array.isArray(props.points)) {
         // Our own file: restore the exact points with their GPS accuracy and marks.
-        pts = props.points.map(q => mkPt(q.lat, q.lng, q.gps_accuracy_m, q.mark));
+        pts = props.points.map(q => mkPt(q.lat, q.lng, q.gps_accuracy_m, q.mark, q.averaged_readings, q.averaged_seconds));
       }
     } else {
       const doc = new DOMParser().parseFromString(text, 'application/xml');
@@ -963,11 +1145,19 @@ ${pins}
 
   async function openFile(file) {
     try {
-      const { pts, name, divs } = parseShapeFile(await file.text());
+      const res = parseShapeFile(await file.text());
+      if (res.places) {
+        const n = importPlaces(res.places);
+        toast(`Backup restored: ${n} place${n === 1 ? '' : 's'} added or updated in My places`, 4000);
+        renderPlaces(); placesEl.hidden = false;
+        return;
+      }
+      const { pts, name, divs } = res;
       if (!pts.length) return toast('No points found in that file');
       if (points.length && !confirm(`Replace the current shape with "${name || file.name}"?`)) return;
       points = pts;
       dividers = divs || []; curDiv = null;
+      currentPlaceId = null;
       changed();
       map.fitBounds(L.latLngBounds(points), { padding: [60, 60], maxZoom: 20 });
       toast(`Opened ${name || file.name}: ${points.length} points` + (parts.length ? `, ${parts.length} parts` : ''));
@@ -977,7 +1167,7 @@ ${pins}
   }
 
   document.getElementById('btnMore').addEventListener('click', () => {
-    sheet.querySelectorAll('[data-act="saveGeo"],[data-act="saveKml"],[data-act="clear"]').forEach(b => { b.disabled = !points.length; });
+    sheet.querySelectorAll('[data-act="saveGeo"],[data-act="saveKml"],[data-act="clear"],[data-act="savePlace"]').forEach(b => { b.disabled = !points.length; });
     const dv = sheet.querySelector('[data-act="divide"]');
     dv.disabled = points.length < 3 || !!walk;
     dv.firstChild.textContent = divideMode ? '✂️ Stop dividing ' : '✂️ Divide into parts ';
@@ -997,7 +1187,9 @@ ${pins}
       if (divideMode) toast('Tap points across the parcel. Start and end on the boundary.', 4000);
     }
     else if (act === 'clearDiv' && confirm('Remove all dividing lines?')) { dividers = []; curDiv = null; refreshDivide(); save(); }
-    else if (act === 'clear' && confirm('Clear all points?')) { points = []; dividers = []; curDiv = null; if (divideMode) setDivideMode(false); changed(); }
+    else if (act === 'clear' && confirm('Clear all points?')) { points = []; dividers = []; curDiv = null; currentPlaceId = null; if (divideMode) setDivideMode(false); changed(); }
+    else if (act === 'places') { renderPlaces(); placesEl.hidden = false; }
+    else if (act === 'savePlace') saveToPlacesFlow();
   });
   fileIn.addEventListener('change', () => {
     const f = fileIn.files[0];
@@ -1264,6 +1456,146 @@ ${pins}
   document.getElementById('btnDivExit').addEventListener('click', () => setDivideMode(false));
 
 
+  // ---------- My places (saved on this phone) ----------
+  const PLACES_KEY = 'areacalc.places.v1';
+  const placesEl = document.getElementById('places');
+  let currentPlaceId = saved.placeId || null;
+
+  function loadPlaces() { try { return JSON.parse(localStorage.getItem(PLACES_KEY)) || []; } catch (e) { return []; } }
+  function storePlaces(list) {
+    try { localStorage.setItem(PLACES_KEY, JSON.stringify(list)); return true; }
+    catch (e) { toast('Could not save: phone storage full?', 4000); return false; }
+  }
+  const newId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  function snapshot(name, id) {
+    return { id: id || newId(), name, savedAt: Date.now(), area: geodesicArea(points),
+      points: points.map(ser), dividers: dividers.filter(d => d.length >= 2).map(d => d.map(ser)) };
+  }
+  // Ask Chrome not to clear this app's data when the phone runs low on space.
+  async function protectStorage() {
+    try { if (navigator.storage && navigator.storage.persist && !(await navigator.storage.persisted())) await navigator.storage.persist(); }
+    catch (e) { /* not supported */ }
+  }
+
+  function savePlace(name, asNew) {
+    const list = loadPlaces();
+    const i = asNew ? -1 : list.findIndex(p => p.id === currentPlaceId);
+    const snap = snapshot(name || (i >= 0 ? list[i].name : `Parcel ${stamp()}`), i >= 0 ? list[i].id : null);
+    if (i >= 0) list[i] = snap; else list.unshift(snap);
+    if (!storePlaces(list)) return null;
+    currentPlaceId = snap.id;
+    save();
+    protectStorage();
+    return snap;
+  }
+
+  function saveToPlacesFlow() {
+    const cur = loadPlaces().find(p => p.id === currentPlaceId);
+    if (cur && confirm(`Update "${cur.name}" with the current shape?\n\nOK = update it, Cancel = save as a new place`)) {
+      savePlace(cur.name);
+      return toast(`Updated "${cur.name}"`);
+    }
+    const name = prompt('Name for this place:', `Parcel ${stamp()}`);
+    if (name === null) return;
+    const snap = savePlace(name.trim() || `Parcel ${stamp()}`, true);
+    if (snap) toast(`Saved "${snap.name}" to My places`);
+  }
+
+  function isCurrentSaved() {
+    const cur = loadPlaces().find(p => p.id === currentPlaceId);
+    return !!cur && JSON.stringify(cur.points) === JSON.stringify(points.map(ser)) &&
+      JSON.stringify(cur.dividers) === JSON.stringify(dividers.filter(d => d.length >= 2).map(d => d.map(ser)));
+  }
+
+  function openPlace(id) {
+    const pl = loadPlaces().find(p => p.id === id);
+    if (!pl) return;
+    if (walk) return toast('Stop walking first');
+    if (points.length && !isCurrentSaved() && !confirm(`Open "${pl.name}"? The current shape isn't saved in My places.`)) return;
+    if (divideMode) setDivideMode(false);
+    points = pl.points.map(deser);
+    dividers = (pl.dividers || []).map(d => d.map(deser)); curDiv = null;
+    currentPlaceId = pl.id;
+    changed();
+    if (points.length) map.fitBounds(L.latLngBounds(points), { padding: [60, 60], maxZoom: 20 });
+    placesEl.hidden = true;
+    toast(`Opened "${pl.name}"`);
+  }
+
+  async function renderPlaces() {
+    const list = loadPlaces();
+    const esc = t => String(t).replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+    document.getElementById('placeList').innerHTML = list.length ? list.map(p => {
+      const d = new Date(p.savedAt), nParts = (p.dividers || []).length;
+      return `<div class="prow${p.id === currentPlaceId ? ' cur' : ''}" data-id="${p.id}">
+        <div class="pmain" data-pa="open"><b>${esc(p.name)}</b><small>${fmtArea(p.area)}` +
+        (nParts ? ` · ${nParts} dividing line${nParts > 1 ? 's' : ''}` : '') +
+        ` · ${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</small></div>
+        <button data-pa="ren" title="Rename">✏️</button><button data-pa="del" title="Delete">🗑️</button></div>`;
+    }).join('') : '<p class="empty">Nothing saved yet. Use ☰ More → ⭐ Save to My places. Every finished walk is saved here automatically.</p>';
+    let prot = null;
+    try { prot = navigator.storage && navigator.storage.persisted ? await navigator.storage.persisted() : null; } catch (e) { /* ignore */ }
+    document.getElementById('persistInfo').textContent = prot
+      ? '🔒 Protected: the phone won\'t clear these when space runs low.'
+      : '⚠ Not protected yet. Add the app to your home screen (⋮ → Add to Home screen) and Chrome will protect it. Back up to a file to be extra safe.';
+  }
+
+  placesEl.addEventListener('click', e => {
+    const btn = e.target.closest('[data-pa],[data-pact]');
+    if (!btn) { if (e.target === placesEl) placesEl.hidden = true; return; }
+    if (btn.dataset.pact === 'close') return (placesEl.hidden = true);
+    if (btn.dataset.pact === 'backup') {
+      const list = loadPlaces();
+      if (!list.length) return toast('Nothing to back up yet');
+      download(`My places backup ${stamp()}.geojson`, placesBackup(list), 'application/geo+json');
+      return toast('Backup saved to your Downloads folder');
+    }
+    const id = btn.closest('.prow').dataset.id, list = loadPlaces(), i = list.findIndex(p => p.id === id);
+    if (i < 0) return;
+    if (btn.dataset.pa === 'open') openPlace(id);
+    else if (btn.dataset.pa === 'ren') {
+      const name = prompt('New name:', list[i].name);
+      if (name && name.trim()) { list[i].name = name.trim(); storePlaces(list); renderPlaces(); }
+    } else if (btn.dataset.pa === 'del' && confirm(`Delete "${list[i].name}" from My places?`)) {
+      list.splice(i, 1); storePlaces(list);
+      if (id === currentPlaceId) { currentPlaceId = null; save(); }
+      renderPlaces();
+    }
+  });
+
+  // All places in one GeoJSON file; opening it here brings them all back.
+  function placesBackup(list) {
+    return JSON.stringify({
+      type: 'FeatureCollection', kind: 'area-calculator-places', app: 'Area Calculator', saved_at: new Date().toISOString(),
+      features: list.map(pl => {
+        const pts = pl.points.map(deser), c = pts.map(p => [r8(p.lng), r8(p.lat)]);
+        return {
+          type: 'Feature',
+          geometry: pts.length >= 3 ? { type: 'Polygon', coordinates: [[...c, c[0]]] } : { type: 'MultiPoint', coordinates: c },
+          properties: Object.assign({ name: pl.name, app: 'Area Calculator', place_id: pl.id, saved_at: new Date(pl.savedAt).toISOString() },
+            areaProps(pl.area), { points: pts.map(ptProps), dividers: (pl.dividers || []).map(d => d.map(deser).map(ptProps)) }),
+        };
+      }),
+    }, null, 1);
+  }
+  function importPlaces(feats) {
+    const list = loadPlaces();
+    let added = 0;
+    feats.forEach(f => {
+      const pr = f.properties || {};
+      if (!Array.isArray(pr.points)) return;
+      const restore = q => ser(mkPt(q.lat, q.lng, q.gps_accuracy_m, q.mark, q.averaged_readings, q.averaged_seconds));
+      const pl = { id: pr.place_id || newId(), name: pr.name || 'Imported place', savedAt: Date.parse(pr.saved_at) || Date.now(),
+        area: pr.area_m2 || 0, points: pr.points.map(restore), dividers: (pr.dividers || []).map(d => d.map(restore)) };
+      const i = list.findIndex(p => p.id === pl.id);
+      if (i < 0) { list.push(pl); added++; } else if (pl.savedAt > list[i].savedAt) { list[i] = pl; added++; }
+    });
+    list.sort((a, b) => b.savedAt - a.savedAt);
+    storePlaces(list);
+    protectStorage();
+    return added;
+  }
+
   // ---------- Overview map (top right) ----------
   // When zoomed in close, a small map shows the wider area with a red box for
   // what's on screen, so you don't get lost. Tap it to jump there.
@@ -1296,6 +1628,7 @@ ${pins}
   redraw();
   updateMini();
   if (points.length >= 1 && !saved.view) map.fitBounds(L.latLngBounds(points), { padding: [60, 60] });
+  if (loadPlaces().length) protectStorage();
   // The page was closed (or Android killed it) in the middle of a walk: offer to carry on.
   if (saved.walk && saved.walk.track && saved.walk.track.length) {
     const w = saved.walk, n = w.track.length;
@@ -1309,7 +1642,7 @@ ${pins}
   }
 
   // Expose for testing.
-  window.__areacalc = { map, get parts() { return parts; }, get dividers() { return dividers; }, geodesicArea, perimeter, selfIntersects, dist, simplifyTrack, parseShapeFile, toGeoJSON, toKML, get points() { return points; }, get walk() { return walk; } };
+  window.__areacalc = { map, areaSigma, loadPlaces, get currentPlaceId() { return currentPlaceId; }, get precise() { return precise; }, get parts() { return parts; }, get dividers() { return dividers; }, geodesicArea, perimeter, selfIntersects, dist, simplifyTrack, parseShapeFile, toGeoJSON, toKML, get points() { return points; }, get walk() { return walk; } };
 })();
 </script>
 </body>

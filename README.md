@@ -11,7 +11,14 @@ A personal, phone-friendly web app: look at satellite imagery, drop points, get 
   Keep the app open on screen: browsers pause GPS when the screen is off or you switch apps.
 - **📌 Mark** puts a point exactly where you stand, instantly. During a walk, tap it at every corner:
   marked corners are always kept, so straight sides come out perfectly straight.
-- **☰ More → Save to phone** writes a `.geojson` file to Downloads (8-decimal lat/lng ≈ 1 mm, plus each point's
+- **Hold 📌 for a Precise Mark**: stand still while GPS is averaged for up to 30 s (readings that disagree are
+  dropped). Typically improves a corner from about ±3–5 m to ±1–2 m. During a walk, recording pauses meanwhile.
+- While walking, **GPS jumps** (readings that would mean moving faster than 4 m/s) are ignored and counted.
+- Under the area you get a **± likely range** (95%), worked out from how precisely each corner is known.
+- **☰ More → 📚 My places** keeps your parcels inside the app: open, rename, delete, update. Every finished
+  walk is saved there automatically. The app asks Chrome to protect its storage (granted once it's on your home
+  screen), and **Back up all places to a file** makes one file you can open here to restore everything.
+- **☰ More → Save as a file** writes a `.geojson` file to Downloads (8-decimal lat/lng ≈ 1 mm, plus each point's
   GPS accuracy and marks). **Open a saved file** loads it back exactly. Also saves `.kml` for Google Earth, and
   opens `.gpx` tracks from GPS logger apps.
 - **☰ More → ✂️ Divide into parts**: draw dividing lines across the parcel by tapping, with 📌 Mark (GPS), or by
