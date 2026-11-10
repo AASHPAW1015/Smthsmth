@@ -14,6 +14,10 @@ A personal, phone-friendly web app: look at satellite imagery, drop points, get 
 - **☰ More → Save to phone** writes a `.geojson` file to Downloads (8-decimal lat/lng ≈ 1 mm, plus each point's
   GPS accuracy and marks). **Open a saved file** loads it back exactly. Also saves `.kml` for Google Earth, and
   opens `.gpx` tracks from GPS logger apps.
+- **☰ More → ✂️ Divide into parts**: draw dividing lines across the parcel by tapping, with 📌 Mark (GPS), or by
+  walking them with 🚶 Walk. Lines snap onto the boundary or onto another line (so you can make a "T").
+  Each part gets a colour, a letter, its area and % of the total, and every side of every part shows its length.
+  Parts and lines are saved in the .geojson/.kml files too.
 - Each side's **length is shown along the line** (feet with acres/ft², metres otherwise).
 - When zoomed in close, an **overview map** appears top-right with a red box showing where you are. Tap it to jump.
 - **🎯 Find me** centres the map on your location.

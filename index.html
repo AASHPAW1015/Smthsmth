@@ -70,6 +70,24 @@
     box-shadow: 0 0 0 2px #3b82f6; }
   .leaflet-control-attribution { font-size: 9px; }
   .leaflet-bottom { bottom: 70px; }
+  body.dividing .leaflet-bottom { bottom: 128px; }
+  #partsList { display: none; grid-template-columns: 1fr 1fr; gap: 2px 10px; font-size: 13px; margin-top: 4px; }
+  #partsList .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; }
+  #partsList .pct { color: var(--muted); }
+  .plabel { position: absolute; transform: translate(-50%, -50%); white-space: nowrap; text-align: center;
+    background: rgba(0,0,0,.7); color: #fff; font-size: 11px; padding: 2px 7px; border-radius: 8px;
+    border: 2px solid; pointer-events: none; line-height: 1.3; }
+  .plabel b { font-size: 14px; }
+  body.dividing #toast { bottom: 150px; }
+  .dvtx { width: 18px; height: 18px; border-radius: 50%; background: #fff; border: 3px solid #111; }
+  .dvtx.mark { background: var(--danger); }
+  #divbar { position: fixed; left: 8px; right: 8px; bottom: calc(76px + env(safe-area-inset-bottom)); z-index: 1000;
+    background: var(--panel); border-radius: 12px; padding: 8px 10px; display: flex; align-items: center; gap: 8px;
+    font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  #divbar[hidden] { display: none; }
+  #divbar span { flex: 1; }
+  #divbar button { background: #374151; color: var(--fg); border: 0; border-radius: 10px; padding: 9px 12px; font-size: 13px; }
+  #divbar #btnDivExit { background: var(--accent); color: #111; font-weight: 700; }
   .popbtn { background: var(--danger); color: #fff; border: 0; border-radius: 8px; padding: 6px 12px; font-size: 14px; }
 </style>
 </head>
@@ -80,6 +98,7 @@
   <div id="stats">
     <div id="areaMain">Tap the map to add points</div>
     <div id="areaAlt"></div>
+    <div id="partsList"></div>
     <div id="perim"></div>
     <div id="walkInfo"></div>
     <div id="warn">⚠ Lines cross each other, so the area is wrong. Drag points to fix.</div>
@@ -97,11 +116,19 @@
   <button id="btnMore"><span class="ic">☰</span><span>More</span></button>
 </div>
 
+<div id="divbar" hidden>
+  <span>✂️ <b>Dividing</b> · tap, 📌 mark or 🚶 walk a line across</span>
+  <button id="btnDivEnd">End line</button>
+  <button id="btnDivExit">Done</button>
+</div>
+
 <div id="sheet" hidden>
   <div class="card">
     <button data-act="saveGeo">💾 Save to phone <small>.geojson · open it here again later</small></button>
     <button data-act="saveKml">🌍 Save for Google Earth <small>.kml</small></button>
     <button data-act="open">📂 Open a saved file <small>.geojson, .kml, or .gpx from a GPS logger</small></button>
+    <button data-act="divide">✂️ Divide into parts <small>tap, mark or walk lines across the parcel</small></button>
+    <button data-act="clearDiv" class="danger">✖️ Remove dividing lines</button>
     <button data-act="clear" class="danger">🗑️ Clear all points</button>
     <button data-act="close">Close</button>
   </div>
@@ -300,8 +327,9 @@
     if (mark) p.mark = true;
     return p;
   }
-  const ser = p => [p.lat, p.lng, p.acc != null ? p.acc : null, p.mark ? 1 : 0];
-  const deser = a => mkPt(a[0], a[1], a[2], a[3]);
+  // (function declarations, so they work in the setup code above that restores saved points)
+  function ser(p) { return [p.lat, p.lng, p.acc != null ? p.acc : null, p.mark ? 1 : 0]; }
+  function deser(a) { return mkPt(a[0], a[1], a[2], a[3]); }
 
   // ---------- Rendering ----------
   function vertexIcon(i, p) {
@@ -319,7 +347,7 @@
       m.on('drag', e => {
         const ll = e.target.getLatLng();
         points[i] = mkPt(ll.lat, ll.lng, null, points[i].mark); // moved by hand: no longer a GPS reading
-        polygon.setLatLngs(points); drawEdgeLabels(); updateStats();
+        polygon.setLatLngs(points); computeParts(); drawParts(); drawEdgeLabels(); updateStats();
       });
       m.on('dragend', () => save());
       m.on('click', () => {
@@ -336,6 +364,7 @@
       markers.push(m);
     });
     polygon.setLatLngs(points);
+    computeParts(); drawParts(); drawDividers();
     drawEdgeLabels();
     updateStats();
   }
@@ -345,26 +374,52 @@
   const MIN_LABEL_PX = 60; // skip sides too short on screen to fit a label
   function drawEdgeLabels() {
     edgeLabels.clearLayers();
-    const n = points.length;
-    if (n < 2 || walk) return;
-    const sides = n < 3 ? 1 : n;
-    for (let i = 0; i < sides; i++) {
-      const a = points[i], b = points[(i + 1) % n];
-      const pa = map.latLngToLayerPoint(a), pb = map.latLngToLayerPoint(b);
-      if (pa.distanceTo(pb) < MIN_LABEL_PX) continue;
+    if (walk && walk.target === 'outline') return;
+    const edges = [], seen = new Set();
+    const key = p => p.lat.toFixed(7) + ',' + p.lng.toFixed(7);
+    const add = (a, b) => {
+      const k = [key(a), key(b)].sort().join('|');
+      if (!seen.has(k)) { seen.add(k); edges.push([a, b]); }
+    };
+    const ring = r => { if (r.length >= 2) for (let i = 0; i < (r.length < 3 ? 1 : r.length); i++) add(r[i], r[(i + 1) % r.length]); };
+    if (parts.length) parts.forEach(p => ring(p.ring));     // every side of every part
+    else {
+      ring(points);
+      dividers.forEach(d => { for (let i = 0; i < d.length - 1; i++) add(d[i], d[i + 1]); });
+    }
+    // Longest sides first, so the major ones always get a label; skip any label
+    // that would sit on top of another label.
+    const boxes = parts.map(p => {
+      const c = map.latLngToLayerPoint(p.center), w = p.compact ? 26 : 92, h = p.compact ? 26 : 40;
+      return { x: c.x - w / 2, y: c.y - h / 2, w, h };
+    });
+    const hit = r => boxes.some(q => r.x < q.x + q.w && q.x < r.x + r.w && r.y < q.y + q.h && q.y < r.y + r.h);
+    const scr = edges.map(([a, b]) => ({ a, b, pa: map.latLngToLayerPoint(a), pb: map.latLngToLayerPoint(b) }))
+      .map(e => Object.assign(e, { len: e.pa.distanceTo(e.pb) }))
+      .filter(e => e.len >= MIN_LABEL_PX)
+      .sort((x, y) => y.len - x.len);
+    for (const { a, b, pa, pb } of scr) {
       let ang = Math.atan2(pb.y - pa.y, pb.x - pa.x) * 180 / Math.PI;
       if (ang > 90) ang -= 180;        // keep text upright
       else if (ang < -90) ang += 180;
-      L.marker(map.layerPointToLatLng(pa.add(pb).divideBy(2)), {
+      const text = fmtDist(dist(a, b)), r = ang * Math.PI / 180;
+      const mid = pa.add(pb).divideBy(2);
+      const cx = mid.x + Math.sin(r) * 13, cy = mid.y - Math.cos(r) * 13; // label sits just above the line
+      const w = text.length * 7 + 12, h = 18;
+      const W = Math.abs(w * Math.cos(r)) + Math.abs(h * Math.sin(r)), H = Math.abs(w * Math.sin(r)) + Math.abs(h * Math.cos(r));
+      const box = { x: cx - W / 2 + 2, y: cy - H / 2 + 2, w: W - 4, h: H - 4 };
+      if (hit(box)) continue;
+      boxes.push(box);
+      L.marker(map.layerPointToLatLng(mid), {
         interactive: false, keyboard: false,
         icon: L.divIcon({
           className: '', iconSize: [0, 0],
-          html: `<div class="elabel" style="transform: rotate(${ang}deg) translate(-50%, calc(-100% - 4px))">${fmtDist(dist(a, b))}</div>`,
+          html: `<div class="elabel" style="transform: rotate(${ang}deg) translate(-50%, calc(-100% - 4px))">${text}</div>`,
         }),
       }).addTo(edgeLabels);
     }
   }
-  map.on('zoomend', drawEdgeLabels);
+  map.on('zoomend', () => { if (parts.length) drawParts(); drawEdgeLabels(); });
 
   function fmtTime(ms) {
     const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, ss = s % 60;
@@ -372,7 +427,7 @@
   }
 
   function updateStats() {
-    const pts = walk ? walk.track : points;
+    const pts = walk && walk.target === 'outline' ? walk.track : points;
     const area = geodesicArea(pts);
     const u = UNITS[unitIdx];
     const main = document.getElementById('areaMain');
@@ -382,24 +437,28 @@
         : `${pts.length} point${pts.length > 1 ? 's' : ''} &middot; need ${3 - pts.length} more`;
       document.getElementById('areaAlt').textContent = '';
     } else {
-      main.innerHTML = `${walk ? '≈ ' : ''}${fmt(u.f(area), u.d)} ${u.name}<small>tap to change units</small>`;
+      main.innerHTML = `${walk && walk.target === 'outline' ? '≈ ' : ''}${fmt(u.f(area), u.d)} ${u.name}<small>tap to change units</small>`;
       document.getElementById('areaAlt').textContent = UNITS
         .filter((_, i) => i !== unitIdx && i < 4)
         .map(x => `${fmt(x.f(area), x.d)} ${x.name}`).join('  ·  ');
     }
-    document.getElementById('perim').textContent = pts.length >= 2 && !walk
+    const pl = document.getElementById('partsList');
+    pl.innerHTML = parts.map(p => `<div><span class="sw" style="background:${p.color}"></span><b>${p.name}</b> ${fmtArea(p.area)}` +
+      ` <span class="pct">${fmt(100 * p.area / area, 1)}%</span></div>`).join('');
+    pl.style.display = parts.length ? 'grid' : 'none';
+    document.getElementById('perim').textContent = pts.length >= 2 && !(walk && walk.target === 'outline')
       ? `${pts.length < 3 ? 'Length' : 'Perimeter'}: ${fmtDist(perimeter(pts))}` : '';
     const wi = document.getElementById('walkInfo');
     wi.style.display = walk ? 'block' : 'none';
     if (walk) {
       const t = walk.track, back = lastFix && t.length ? dist(lastFix.ll, t[0]) : 0;
       const marks = t.filter(p => p.mark).length;
-      wi.textContent = `🚶 ⏱ ${fmtTime(Date.now() - walk.startedAt)} · ${t.length} pts` + (marks ? ` · ${marks} 📌` : '') +
-        ` · walked ${fmtDist(walk.walked)}` + (t.length > 1 ? ` · start ${fmtDist(back)} away` : '') +
+      wi.textContent = (walk.target === 'divider' ? '✂️ dividing line · ' : '') + `🚶 ⏱ ${fmtTime(Date.now() - walk.startedAt)} · ${t.length} pts` + (marks ? ` · ${marks} 📌` : '') +
+        ` · walked ${fmtDist(walk.walked)}` + (t.length > 1 && walk.target === 'outline' ? ` · start ${fmtDist(back)} away` : '') +
         (walk.waiting ? ` · ${walk.waiting}` : '');
     }
     document.getElementById('warn').style.display = selfIntersects(pts) ? 'block' : 'none';
-    document.getElementById('btnUndo').disabled = !!walk || points.length === 0;
+    document.getElementById('btnUndo').disabled = !!walk || (divideMode ? !dividers.length : points.length === 0);
     updateMiniShape();
   }
 
@@ -413,10 +472,10 @@
     try {
       const c = map.getCenter();
       localStorage.setItem(STORE_KEY, JSON.stringify({
-        points: points.map(ser), unitIdx,
+        points: points.map(ser), unitIdx, dividers: dividers.map(d => d.map(ser)),
         view: { center: [c.lat, c.lng], zoom: map.getZoom() },
         // An unfinished walk is kept after every GPS point, so it survives the page being closed.
-        walk: walk ? { track: walk.track.map(ser), walked: walk.walked, maxFromStart: walk.maxFromStart, startedAt: walk.startedAt } : null,
+        walk: walk ? { target: walk.target, track: walk.track.map(ser), walked: walk.walked, maxFromStart: walk.maxFromStart, startedAt: walk.startedAt } : null,
       }));
     } catch (e) { /* storage unavailable: fine, just don't persist */ }
   }
@@ -433,13 +492,14 @@
   // ---------- Interactions ----------
   map.on('click', e => {
     if (locked || walk) return;
+    if (divideMode) return addDividerPoint(e.latlng, SNAP_PX);
     points.push(e.latlng);
     changed();
   });
 
   document.getElementById('areaMain').addEventListener('click', () => {
-    if ((walk ? walk.track : points).length < 3) return;
-    unitIdx = (unitIdx + 1) % UNITS.length; drawEdgeLabels(); updateStats(); save();
+    if ((walk && walk.target === 'outline' ? walk.track : points).length < 3) return;
+    unitIdx = (unitIdx + 1) % UNITS.length; drawParts(); drawEdgeLabels(); updateStats(); save();
   });
 
   const btnLock = document.getElementById('btnLock');
@@ -451,7 +511,16 @@
     toast(locked ? 'Taps no longer add points' : 'Tap the map to add points');
   });
 
-  document.getElementById('btnUndo').addEventListener('click', () => { points.pop(); changed(); });
+  document.getElementById('btnUndo').addEventListener('click', () => {
+    if (divideMode) {
+      // Undo the last dividing-line point (reopening that line for more taps).
+      if (curDiv == null && dividers.length) curDiv = dividers.length - 1;
+      if (curDiv != null) { dividers[curDiv].pop(); if (!dividers[curDiv].length) { dividers.splice(curDiv, 1); curDiv = null; } }
+      refreshDivide(); save();
+      return;
+    }
+    points.pop(); changed();
+  });
 
   // ---------- GPS ----------
   let meMarker = null, accCircle = null, lastFix = null, watchId = null;
@@ -519,10 +588,15 @@
       if (last) walk.walked += dist(last, p);
       t.push(p);
       walk.maxFromStart = Math.max(walk.maxFromStart, dist(t[0], p));
-      trackLine.setLatLngs(t); polygon.setLatLngs(t);
+      trackLine.setLatLngs(t);
+      if (walk.target === 'outline') polygon.setLatLngs(t);
       L.circleMarker(p, { radius: 7, color: '#fff', weight: 2, fillColor: '#ef4444', fillOpacity: 1, interactive: false }).addTo(walkMarks);
       save(); updateStats();
       toast(`📌 Mark ${t.filter(q => q.mark).length} saved (${accTxt})`);
+    } else if (divideMode) {
+      // Snap onto the boundary / another line if GPS says we're about on it.
+      addDividerPoint(p, Math.max(8, f.acc) / metresPerPx());
+      if (!map.getBounds().contains(p)) map.panTo(p);
     } else {
       points.push(p);
       changed();
@@ -598,9 +672,10 @@
   }, 5000);
 
   function beginWalk(state) {
-    walk = Object.assign({ track: [], walked: 0, maxFromStart: 0, startedAt: Date.now() }, state,
+    walk = Object.assign({ target: 'outline', track: [], walked: 0, maxFromStart: 0, startedAt: Date.now() }, state,
       { waiting: 'getting GPS…', watchId: null, hiddenAt: null });
-    trackLine.setLatLngs(walk.track); polygon.setLatLngs(walk.track);
+    trackLine.setLatLngs(walk.track);
+    if (walk.target === 'outline') polygon.setLatLngs(walk.track);
     walkMarks.clearLayers();
     walk.track.filter(p => p.mark).forEach(p =>
       L.circleMarker(p, { radius: 7, color: '#fff', weight: 2, fillColor: '#ef4444', fillOpacity: 1, interactive: false }).addTo(walkMarks));
@@ -613,8 +688,14 @@
 
   function startWalk() {
     if (!navigator.geolocation) return toast('GPS not available');
+    if (divideMode) {
+      if (curDiv != null && dividers[curDiv].length < 2) dividers.splice(curDiv, 1);
+      curDiv = null;
+      beginWalk({ target: 'divider' });
+      return toast('Walk along the dividing line from one side to the other, then tap Stop.', 4000);
+    }
     if (points.length && !confirm('Start walking a new boundary? This clears the current shape (save it first from ☰ More if you want to keep it).')) return;
-    points = [];
+    points = []; dividers = [];
     beginWalk({});
     toast('Walk the boundary. Keep this screen on. Tap 📌 Mark at corners.', 4000);
   }
@@ -637,9 +718,10 @@
     const fromStart = dist(t[0], p);
     walk.maxFromStart = Math.max(walk.maxFromStart, fromStart);
     trackLine.setLatLngs(t);
-    polygon.setLatLngs(t);
+    if (walk.target === 'outline') polygon.setLatLngs(t);
     if (!map.getBounds().pad(-0.25).contains(p)) map.panTo(p);
     save();
+    if (walk.target !== 'outline') return updateStats();
     // Loop closed: we went properly away from the start and are now back near it.
     const closeR = Math.max(WALK_CLOSE_MIN, Math.min(f.acc, 15));
     if (t.length >= 4 && walk.maxFromStart > 2 * closeR + 10 && fromStart <= closeR) return finishWalk(true);
@@ -658,10 +740,10 @@
     return L.LineUtil.simplify(pts, WALK_SIMPLIFY).map(p => lls[p.i]);
   }
   // Same, but 📌 marks are always kept: simplify the stretches between them separately.
-  // The shape is a closed loop, so the stretch back to the start is cleaned up too.
-  function simplifyTrack(lls) {
+  // For a closed loop the stretch back to the start is cleaned up too.
+  function simplifyTrack(lls, open) {
     if (lls.length < 4) return lls.slice();
-    lls = [...lls, lls[0]];
+    if (!open) lls = [...lls, lls[0]];
     const out = [];
     let seg = [lls[0]];
     for (let i = 1; i < lls.length; i++) {
@@ -672,13 +754,28 @@
         seg = [lls[i]];
       }
     }
-    return out.slice(0, -1); // drop the repeated start point
+    return open ? out : out.slice(0, -1); // drop the repeated start point
   }
 
   function finishWalk(closed) {
     if (walk.watchId != null) navigator.geolocation.clearWatch(walk.watchId);
     letScreenSleep();
     let t = walk.track;
+    if (walk.target === 'divider') {
+      walk = null;
+      trackLine.setLatLngs([]); walkMarks.clearLayers(); setWalkButton(false);
+      const line = simplifyTrack(t, true);
+      if (line.length >= 2) {
+        // Snap the ends onto the boundary / other lines if we finished about on them.
+        [0, line.length - 1].forEach(i => {
+          const s = snapPoint(line[i], Math.max(10, line[i].acc || 0) / metresPerPx());
+          if (s) line[i] = mkPt(s.lat, s.lng, line[i].acc, line[i].mark);
+        });
+        dividers.push(line);
+      }
+      refreshDivide(); save();
+      return toast(parts.length ? `✅ Divided into ${parts.length} parts` : 'Line saved, but it doesn\'t cut all the way across', 4000);
+    }
     // A last point practically on top of the first adds nothing: the shape closes itself.
     if (t.length > 3 && !t[t.length - 1].mark && dist(t[t.length - 1], t[0]) < WALK_CLOSE_MIN) t = t.slice(0, -1);
     walk = null;
@@ -697,7 +794,7 @@
 
   btnWalk.addEventListener('click', () => {
     if (!walk) return startWalk();
-    if (confirm('Stop walking and close the shape?')) finishWalk(false);
+    if (confirm(walk.target === 'divider' ? 'Stop walking and use this as a dividing line?' : 'Stop walking and close the shape?')) finishWalk(false);
   });
 
   // ---------- Save / open files ----------
@@ -712,13 +809,14 @@
     return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}.${z(d.getMinutes())}`;
   }
 
+  const areaProps = a => ({ area_m2: rnd(a, 2), area_acres: rnd(a / 4046.8564224, 4), area_hectares: rnd(a / 1e4, 4) });
   function summary() {
-    const a = geodesicArea(points);
-    return {
-      area_m2: rnd(a, 2), area_acres: rnd(a / 4046.8564224, 4), area_hectares: rnd(a / 1e4, 4),
-      perimeter_m: rnd(perimeter(points), 2),
-    };
+    return Object.assign(areaProps(geodesicArea(points)), { perimeter_m: rnd(perimeter(points), 2) });
   }
+  const ptProps = (p, i) => ({
+    n: i + 1, lat: r8(p.lat), lng: r8(p.lng),
+    gps_accuracy_m: p.acc != null ? rnd(p.acc, 1) : null, mark: !!p.mark,
+  });
 
   function toGeoJSON(name) {
     const c = points.map(p => [r8(p.lng), r8(p.lat)]);
@@ -730,12 +828,20 @@
       features: [{
         type: 'Feature', geometry,
         properties: Object.assign({ name, app: 'Area Calculator', saved_at: new Date().toISOString() }, summary(), {
-          points: points.map((p, i) => ({
-            n: i + 1, lat: r8(p.lat), lng: r8(p.lng),
-            gps_accuracy_m: p.acc != null ? rnd(p.acc, 1) : null, mark: !!p.mark,
-          })),
+          points: points.map(ptProps),
         }),
-      }],
+      },
+      ...parts.map(p => ({
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [[...p.ring, p.ring[0]].map(q => [r8(q.lng), r8(q.lat)])] },
+        properties: Object.assign({ name: 'Part ' + p.name, role: 'part', color: p.color,
+          percent: rnd(100 * p.area / geodesicArea(points), 2) }, areaProps(p.area), { perimeter_m: rnd(perimeter(p.ring), 2) }),
+      })),
+      ...dividers.filter(d => d.length >= 2).map((d, i) => ({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: d.map(q => [r8(q.lng), r8(q.lat)]) },
+        properties: { name: 'Dividing line ' + (i + 1), role: 'divider', length_m: rnd(perimeter(d), 2), points: d.map(ptProps) },
+      }))],
     }, null, 1);
   }
 
@@ -755,6 +861,20 @@
 <Placemark><name>${xmlEsc(name)}</name><styleUrl>#area</styleUrl>
 <description>Area: ${s.area_m2} m² = ${s.area_acres} acres = ${s.area_hectares} ha. Perimeter: ${s.perimeter_m} m</description>
 ${shape}</Placemark>
+${parts.length ? `<Folder><name>Parts</name>
+${parts.map(p => {
+      const a = areaProps(p.area), c = p.color.slice(1);
+      const kc = c.slice(4, 6) + c.slice(2, 4) + c.slice(0, 2); // KML colours are aabbggrr
+      return `<Placemark><name>${p.name}: ${a.area_acres} acres</name>` +
+        `<description>${a.area_m2} m² = ${a.area_acres} acres = ${a.area_hectares} ha (${rnd(100 * p.area / geodesicArea(points), 1)}%)</description>` +
+        `<Style><LineStyle><color>ff${kc}</color><width>2</width></LineStyle><PolyStyle><color>66${kc}</color></PolyStyle></Style>` +
+        `<Polygon><outerBoundaryIs><LinearRing><coordinates>${[...p.ring, p.ring[0]].map(q => `${r8(q.lng)},${r8(q.lat)},0`).join(' ')}</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>`;
+    }).join('\n')}
+</Folder>` : ''}
+${dividers.filter(d => d.length >= 2).length ? `<Folder><name>Dividing lines</name>
+${dividers.filter(d => d.length >= 2).map((d, i) => `<Placemark><name>Dividing line ${i + 1}</name><Style><LineStyle><color>ffffffff</color><width>3</width></LineStyle></Style>` +
+      `<LineString><coordinates>${d.map(q => `${r8(q.lng)},${r8(q.lat)},0`).join(' ')}</coordinates></LineString></Placemark>`).join('\n')}
+</Folder>` : ''}
 <Folder><name>Points</name>
 ${pins}
 </Folder></Document></kml>`;
@@ -780,13 +900,17 @@ ${pins}
 
   // Read GeoJSON (ours or any), KML (Google Earth) or GPX (GPS logger apps).
   function parseShapeFile(text) {
-    text = text.replace(/^﻿/, '').trim();
-    let pts = [], name = '', ours = false, track = false;
+    text = text.replace(/^\uFEFF/, '').trim();
+    let pts = [], name = '', ours = false, track = false, divs = [];
     if (text[0] === '{' || text[0] === '[') {
       const j = JSON.parse(text);
       const feats = j.type === 'FeatureCollection' ? j.features : j.type === 'Feature' ? [j] : [{ geometry: j, properties: {} }];
       const geomOf = f => f && f.geometry;
-      const pick = types => feats.find(f => geomOf(f) && types.includes(geomOf(f).type));
+      const role = f => (f && f.properties && f.properties.role) || '';
+      const pick = types => feats.find(f => geomOf(f) && !role(f) && types.includes(geomOf(f).type));
+      divs = feats.filter(f => role(f) === 'divider' && geomOf(f) && f.geometry.type === 'LineString').map(f =>
+        Array.isArray(f.properties.points) ? f.properties.points.map(q => mkPt(q.lat, q.lng, q.gps_accuracy_m, q.mark))
+          : f.geometry.coordinates.map(c => mkPt(c[1], c[0])));
       let f = pick(['Polygon', 'MultiPolygon']);
       if (f) {
         const g = f.geometry;
@@ -820,7 +944,10 @@ ${pins}
         const n = tags('name')[0]; name = n ? n.textContent : '';
       } else {
         const poly = tags('Polygon')[0], line = tags('LineString')[0], gx = tags('coord');
-        if (poly) pts = kmlCoords(tags('coordinates').find(c => poly.contains(c)));
+        if (poly) {
+          pts = kmlCoords(tags('coordinates').find(c => poly.contains(c)));
+          divs = tags('LineString').map(l => kmlCoords(l.getElementsByTagNameNS('*', 'coordinates')[0])).filter(d => d.length >= 2);
+        }
         else if (line) { pts = kmlCoords(line.getElementsByTagNameNS('*', 'coordinates')[0]); track = pts.length > 30; }
         else if (gx.length) { pts = gx.map(c => c.textContent.trim().split(/\s+/).map(Number)).map(c => mkPt(c[1], c[0])); track = true; }
         else pts = tags('Point').flatMap(p => kmlCoords(p.getElementsByTagNameNS('*', 'coordinates')[0]));
@@ -831,18 +958,19 @@ ${pins}
     // A closed ring repeats its first point at the end; we don't need that.
     if (pts.length > 2 && pts[0].equals(pts[pts.length - 1], 1e-10)) pts.pop();
     if (track) pts = simplifyTrack(pts);
-    return { pts, name };
+    return { pts, name, divs };
   }
 
   async function openFile(file) {
     try {
-      const { pts, name } = parseShapeFile(await file.text());
+      const { pts, name, divs } = parseShapeFile(await file.text());
       if (!pts.length) return toast('No points found in that file');
       if (points.length && !confirm(`Replace the current shape with "${name || file.name}"?`)) return;
       points = pts;
+      dividers = divs || []; curDiv = null;
       changed();
       map.fitBounds(L.latLngBounds(points), { padding: [60, 60], maxZoom: 20 });
-      toast(`Opened ${name || file.name}: ${points.length} points`);
+      toast(`Opened ${name || file.name}: ${points.length} points` + (parts.length ? `, ${parts.length} parts` : ''));
     } catch (e) {
       toast("Couldn't read that file (" + e.message + ')', 4000);
     }
@@ -850,6 +978,10 @@ ${pins}
 
   document.getElementById('btnMore').addEventListener('click', () => {
     sheet.querySelectorAll('[data-act="saveGeo"],[data-act="saveKml"],[data-act="clear"]').forEach(b => { b.disabled = !points.length; });
+    const dv = sheet.querySelector('[data-act="divide"]');
+    dv.disabled = points.length < 3 || !!walk;
+    dv.firstChild.textContent = divideMode ? '✂️ Stop dividing ' : '✂️ Divide into parts ';
+    sheet.querySelector('[data-act="clearDiv"]').hidden = !dividers.length;
     sheet.querySelector('[data-act="open"]').disabled = !!walk;
     sheet.hidden = false;
   });
@@ -860,13 +992,276 @@ ${pins}
     if (act === 'saveGeo') saveFile('geojson');
     else if (act === 'saveKml') saveFile('kml');
     else if (act === 'open') fileIn.click();
-    else if (act === 'clear' && confirm('Clear all points?')) { points = []; changed(); }
+    else if (act === 'divide') {
+      setDivideMode(!divideMode);
+      if (divideMode) toast('Tap points across the parcel. Start and end on the boundary.', 4000);
+    }
+    else if (act === 'clearDiv' && confirm('Remove all dividing lines?')) { dividers = []; curDiv = null; refreshDivide(); save(); }
+    else if (act === 'clear' && confirm('Clear all points?')) { points = []; dividers = []; curDiv = null; if (divideMode) setDivideMode(false); changed(); }
   });
   fileIn.addEventListener('change', () => {
     const f = fileIn.files[0];
     fileIn.value = '';
     if (f) openFile(f);
   });
+
+
+  // ---------- Divide into parts ----------
+  // Draw (tap), mark (GPS) or walk dividing lines across the parcel. Each line that
+  // crosses the parcel cuts it; every resulting part gets its own colour and area.
+  // Lines can end on another line (a "T"), and one line can cut a shape several times.
+  let dividers = (saved.dividers || []).map(l => l.map(a => deser(a)));
+  let divideMode = false;
+  let curDiv = null;   // index of the line being drawn by tapping, or null
+  let parts = [];      // [{ ring: [LatLng], area, center, name, color }]
+  const PART_COLORS = ['#f97316', '#22c55e', '#3b82f6', '#e11d48', '#a855f7', '#14b8a6', '#eab308', '#ec4899'];
+  const partsLayer = L.layerGroup().addTo(map);
+  const dividerLayer = L.layerGroup().addTo(map);
+  const SNAP_PX = 22;  // taps this close to the boundary or another line snap onto it
+
+  // Flat x/y in metres around an origin: exact enough for anything parcel-sized.
+  function localProj(o) {
+    const s = Math.sin(rad(o.lat)), w = Math.sqrt(1 - E2_WGS84 * s * s);
+    const kx = rad(1) * A_WGS84 / w * Math.cos(rad(o.lat)), ky = rad(1) * A_WGS84 * (1 - E2_WGS84) / (w * w * w);
+    return {
+      fwd: p => ({ x: (p.lng - o.lng) * kx, y: (p.lat - o.lat) * ky }),
+      inv: q => L.latLng(o.lat + q.y / ky, o.lng + q.x / kx),
+    };
+  }
+
+  function segHit(p, p2, q, q2) {
+    const rx = p2.x - p.x, ry = p2.y - p.y, sx = q2.x - q.x, sy = q2.y - q.y;
+    const den = rx * sy - ry * sx;
+    if (Math.abs(den) < 1e-12) return null; // parallel
+    const t = ((q.x - p.x) * sy - (q.y - p.y) * sx) / den, u = ((q.x - p.x) * ry - (q.y - p.y) * rx) / den;
+    if (t < -1e-9 || t > 1 + 1e-9 || u < -1e-9 || u > 1 + 1e-9) return null;
+    const tc = Math.min(1, Math.max(0, t)), uc = Math.min(1, Math.max(0, u));
+    return { t: tc, u: uc, x: p.x + rx * tc, y: p.y + ry * tc };
+  }
+  function segDist(p, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy;
+    const t = L2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / L2)) : 0;
+    return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+  }
+  function edgeDist(p, ring) {
+    let d = Infinity;
+    for (let i = 0; i < ring.length; i++) d = Math.min(d, segDist(p, ring[i], ring[(i + 1) % ring.length]));
+    return d;
+  }
+  function inside(p, ring) {
+    let c = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const a = ring[i], b = ring[j];
+      if ((a.y > p.y) !== (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) c = !c;
+    }
+    return c;
+  }
+  const insideStrict = (p, ring) => inside(p, ring) && edgeDist(p, ring) > 0.02;
+  function pointAlong(line, l) {
+    const j = Math.min(Math.floor(l), line.length - 2), t = l - j, a = line[j], b = line[j + 1];
+    return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+  }
+  // Ring vertices strictly after position ra, up to position rb, going forward.
+  function ringBetween(ring, ra, rb) {
+    const n = ring.length, fa = Math.floor(ra) % n, fb = Math.floor(rb) % n;
+    let steps = ((fb - fa) % n + n) % n;
+    if (steps === 0 && !(rb > ra)) steps = n;
+    const out = [];
+    for (let k = 0; k < steps; k++) out.push(ring[(fa + 1 + k) % n]);
+    return out;
+  }
+  function cleanRing(r) {
+    const out = [];
+    for (const p of r) if (!out.length || Math.hypot(p.x - out[out.length - 1].x, p.y - out[out.length - 1].y) > 1e-6) out.push(p);
+    while (out.length > 1 && Math.hypot(out[0].x - out[out.length - 1].x, out[0].y - out[out.length - 1].y) <= 1e-6) out.pop();
+    return out;
+  }
+
+  // Cut a ring with a polyline: find the first stretch of the line that runs through the
+  // inside from one boundary crossing to the next, split there, and repeat on both halves.
+  function splitByLine(ring, line, depth) {
+    depth = depth || 0;
+    const n = ring.length;
+    if (n < 3 || depth > 40) return [ring];
+    const hits = [];
+    for (let j = 0; j < line.length - 1; j++) {
+      for (let i = 0; i < n; i++) {
+        const h = segHit(line[j], line[j + 1], ring[i], ring[(i + 1) % n]);
+        if (h) hits.push({ l: j + h.t, r: i + h.u, x: h.x, y: h.y });
+      }
+    }
+    hits.sort((a, b) => a.l - b.l);
+    for (let k = 0; k < hits.length - 1; k++) {
+      const A = hits[k], B = hits[k + 1];
+      if (Math.hypot(B.x - A.x, B.y - A.y) < 0.01) continue;
+      if (!insideStrict(pointAlong(line, (A.l + B.l) / 2), ring)) continue;
+      const inner = [];
+      for (let j = Math.ceil(A.l); j <= Math.floor(B.l); j++) if (j > A.l + 1e-9 && j < B.l - 1e-9) inner.push(line[j]);
+      const a = { x: A.x, y: A.y }, b = { x: B.x, y: B.y };
+      const r1 = cleanRing([a, ...ringBetween(ring, A.r, B.r), b, ...inner.slice().reverse()]);
+      const r2 = cleanRing([b, ...ringBetween(ring, B.r, A.r), a, ...inner]);
+      return [...splitByLine(r1, line, depth + 1), ...splitByLine(r2, line, depth + 1)];
+    }
+    return [ring];
+  }
+
+  // Lengthen both ends a little so a line that ends exactly on the boundary still crosses it.
+  function extendEnds(line, m) {
+    const ext = (a, b) => { const d = Math.hypot(a.x - b.x, a.y - b.y) || 1; return { x: a.x + (a.x - b.x) / d * m, y: a.y + (a.y - b.y) / d * m }; };
+    const out = line.slice(), n = line.length;
+    out[0] = ext(line[0], line[1]);
+    out[n - 1] = ext(line[n - 1], line[n - 2]);
+    return out;
+  }
+
+  // Best spot for a label: the inside point farthest from the edges.
+  function labelSpot(ring) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    ring.forEach(p => { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); });
+    let best = null, bestD = -1, cx = (minX + maxX) / 2, cy = (minY + maxY) / 2, w = maxX - minX, h = maxY - minY;
+    for (let pass = 0; pass < 3; pass++) {
+      const N = 14;
+      for (let i = 0; i <= N; i++) for (let j = 0; j <= N; j++) {
+        const p = { x: cx - w / 2 + w * i / N, y: cy - h / 2 + h * j / N };
+        if (!inside(p, ring)) continue;
+        const d = edgeDist(p, ring);
+        if (d > bestD) { bestD = d; best = p; }
+      }
+      if (!best) break;
+      cx = best.x; cy = best.y; w /= 4; h /= 4;
+    }
+    return best || ring[0];
+  }
+
+  function computeParts() {
+    parts = [];
+    const lines = dividers.filter(d => d.length >= 2);
+    if (points.length < 3 || !lines.length || (walk && walk.target === 'outline')) return;
+    const pr = localProj(points[0]);
+    let rings = [points.map(pr.fwd)];
+    for (const d of lines) {
+      const line = extendEnds(d.map(pr.fwd), 0.3);
+      rings = rings.flatMap(r => splitByLine(r, line));
+    }
+    if (rings.length < 2) return; // no line goes all the way across yet
+    parts = rings.map(r => {
+      const ring = r.map(pr.inv);
+      const spot = labelSpot(r);
+      return { ring, area: geodesicArea(ring), center: pr.inv(spot), clear: edgeDist(spot, r) };
+    });
+    // Letters run north to south, then west to east, so they stay put while you edit.
+    parts.sort((a, b) => (b.center.lat - a.center.lat) || (a.center.lng - b.center.lng));
+    parts.forEach((p, i) => { p.name = String.fromCharCode(65 + (i % 26)); p.color = PART_COLORS[i % PART_COLORS.length]; });
+  }
+
+  function fmtArea(m2) {
+    const u = UNITS[unitIdx];
+    return `${fmt(u.f(m2), u.d)} ${u.name}`;
+  }
+
+  function drawParts() {
+    partsLayer.clearLayers();
+    polygon.setStyle({ fillOpacity: parts.length ? 0 : 0.25 });
+    const mpp = metresPerPx();
+    parts.forEach(p => {
+      p.compact = p.clear / mpp < 24; // too small on screen for the full label: show just the letter
+      L.polygon(p.ring, { color: p.color, weight: 0, fillOpacity: 0.4, interactive: false }).addTo(partsLayer);
+      L.marker(p.center, {
+        interactive: false, keyboard: false,
+        icon: L.divIcon({ className: '', iconSize: [0, 0],
+          html: p.compact ? `<div class="plabel" style="border-color:${p.color}"><b>${p.name}</b></div>`
+            : `<div class="plabel" style="border-color:${p.color}"><b>${p.name}</b><br>${fmtArea(p.area)}</div>` }),
+      }).addTo(partsLayer);
+    });
+  }
+
+  const dividerLines = [];
+  function drawDividers() {
+    dividerLayer.clearLayers();
+    dividerLines.length = 0;
+    dividers.forEach((d, di) => {
+      const active = divideMode && di === curDiv;
+      dividerLines[di] = L.polyline(d, { color: '#fff', weight: 3, dashArray: active ? '8 6' : null, interactive: false }).addTo(dividerLayer);
+      if (!divideMode) return;
+      d.forEach((p, pi) => {
+        const m = L.marker(p, { draggable: true, icon: L.divIcon({ className: '', iconSize: [18, 18], iconAnchor: [9, 9], html: `<div class="dvtx${p.mark ? ' mark' : ''}"></div>` }) }).addTo(dividerLayer);
+        m.on('drag', e => {
+          const ll = e.target.getLatLng();
+          d[pi] = mkPt(ll.lat, ll.lng, null, p.mark);
+          dividerLines[di].setLatLngs(d);
+          computeParts(); drawParts(); drawEdgeLabels(); updateStats();
+        });
+        m.on('dragend', e => {
+          const s = snapPoint(e.target.getLatLng(), SNAP_PX, di);
+          if (s) d[pi] = mkPt(s.lat, s.lng, null, p.mark);
+          refreshDivide(); save();
+        });
+        m.on('click', () => {
+          const div = L.DomUtil.create('div');
+          div.innerHTML = `<div style="margin-bottom:6px"><b>Dividing line ${di + 1}</b>, point ${pi + 1}<br><small>${p.lat.toFixed(7)}, ${p.lng.toFixed(7)}</small></div>`;
+          const b1 = L.DomUtil.create('button', 'popbtn', div), b2 = L.DomUtil.create('button', 'popbtn', div);
+          b1.textContent = 'Delete point'; b2.textContent = 'Delete line'; b2.style.marginLeft = '6px';
+          L.DomEvent.on(b1, 'click', ev => { L.DomEvent.stop(ev); map.closePopup(); d.splice(pi, 1); tidyDividers(); refreshDivide(); save(); });
+          L.DomEvent.on(b2, 'click', ev => { L.DomEvent.stop(ev); map.closePopup(); dividers.splice(di, 1); curDiv = null; refreshDivide(); save(); });
+          L.popup({ offset: [0, -6] }).setLatLng(d[pi]).setContent(div).openOn(map);
+        });
+      });
+    });
+  }
+
+  function tidyDividers() {
+    const keep = dividers.filter((d, i) => d.length >= 2 || (divideMode && i === curDiv));
+    if (curDiv != null) curDiv = keep.indexOf(dividers[curDiv]);
+    if (curDiv === -1) curDiv = null;
+    dividers = keep;
+  }
+
+  function refreshDivide() {
+    computeParts(); drawParts(); drawDividers(); drawEdgeLabels(); updateStats();
+  }
+
+  // Nearest point on the parcel boundary or on another dividing line, if within tolPx.
+  function snapPoint(ll, tolPx, skipDiv) {
+    const P = map.latLngToLayerPoint(ll);
+    let best = null, bestD = tolPx;
+    const tryEdge = (a, b) => {
+      const A = map.latLngToLayerPoint(a), B = map.latLngToLayerPoint(b);
+      const q = L.LineUtil.closestPointOnSegment(P, A, B), dd = q.distanceTo(P);
+      if (dd < bestD) { bestD = dd; best = map.layerPointToLatLng(q); }
+    };
+    for (let i = 0; i < points.length; i++) tryEdge(points[i], points[(i + 1) % points.length]);
+    dividers.forEach((d, di) => { if (di !== skipDiv) for (let i = 0; i < d.length - 1; i++) tryEdge(d[i], d[i + 1]); });
+    return best;
+  }
+  const metresPerPx = () => 40075016.686 * Math.cos(rad(map.getCenter().lat)) / Math.pow(2, map.getZoom() + 8);
+
+  function addDividerPoint(ll, tolPx) {
+    if (curDiv == null) { dividers.push([]); curDiv = dividers.length - 1; }
+    const d = dividers[curDiv];
+    const s = snapPoint(ll, tolPx, curDiv);
+    const p = s ? mkPt(s.lat, s.lng, ll.acc, ll.mark) : ll;
+    d.push(p);
+    // Line reached the boundary or another line after crossing: it's done, the next tap starts a new one.
+    const done = s && d.length >= 2;
+    if (done) curDiv = null;
+    refreshDivide(); save();
+    if (done) toast(parts.length ? `Divided into ${parts.length} parts. Tap to draw another line.` : 'Line finished, but it doesn\'t cut all the way across yet');
+  }
+
+  const divbar = document.getElementById('divbar');
+  function setDivideMode(on) {
+    divideMode = on;
+    if (!on) { tidyDividers(); curDiv = null; }
+    document.body.classList.toggle('dividing', on);
+    divbar.hidden = !on;
+    refreshDivide();
+    save();
+  }
+  document.getElementById('btnDivEnd').addEventListener('click', () => {
+    if (curDiv != null && dividers[curDiv].length < 2) dividers.splice(curDiv, 1);
+    curDiv = null; refreshDivide(); save();
+  });
+  document.getElementById('btnDivExit').addEventListener('click', () => setDivideMode(false));
 
 
   // ---------- Overview map (top right) ----------
@@ -905,16 +1300,16 @@ ${pins}
   if (saved.walk && saved.walk.track && saved.walk.track.length) {
     const w = saved.walk, n = w.track.length;
     if (confirm(`A walk was still in progress (${n} points, started ${fmtTime(Date.now() - w.startedAt)} ago). Continue it?\n\nOK = continue walking, Cancel = finish it now`)) {
-      beginWalk({ track: w.track.map(deser), walked: w.walked, maxFromStart: w.maxFromStart, startedAt: w.startedAt });
+      beginWalk({ target: w.target || 'outline', track: w.track.map(deser), walked: w.walked, maxFromStart: w.maxFromStart, startedAt: w.startedAt });
       toast('Walk resumed', 3000);
     } else {
-      walk = { track: w.track.map(deser), walked: w.walked, maxFromStart: w.maxFromStart, startedAt: w.startedAt };
+      walk = { target: w.target || 'outline', track: w.track.map(deser), walked: w.walked, maxFromStart: w.maxFromStart, startedAt: w.startedAt };
       finishWalk(false);
     }
   }
 
   // Expose for testing.
-  window.__areacalc = { geodesicArea, perimeter, selfIntersects, dist, simplifyTrack, parseShapeFile, toGeoJSON, toKML, get points() { return points; }, get walk() { return walk; } };
+  window.__areacalc = { map, get parts() { return parts; }, get dividers() { return dividers; }, geodesicArea, perimeter, selfIntersects, dist, simplifyTrack, parseShapeFile, toGeoJSON, toKML, get points() { return points; }, get walk() { return walk; } };
 })();
 </script>
 </body>
