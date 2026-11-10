@@ -85,17 +85,84 @@
     zoomControl: false,
     center: saved.view ? saved.view.center : [20, 0],
     zoom: saved.view ? saved.view.zoom : 3,
-    maxZoom: 21,
+    maxZoom: 22,
   });
 
-  // Esri World Imagery: free satellite tiles, no API key needed.
-  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-    maxNativeZoom: 19, maxZoom: 21,
+  // ---------- Satellite imagery ----------
+  // Esri World Imagery: free satellite tiles, no API key needed. How deep the photos go
+  // varies by place (z17 in some areas, z20+ in others). Where a zoom level has no photo,
+  // Esri serves a grey "Map data not yet available" tile. To avoid that, we ask Esri's
+  // tilemap service which levels really exist and draw the deepest real photo, enlarged.
+  const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer';
+  const MAX_UPSCALE = 6;   // look up to 6 levels shallower (photo enlarged at most 64x)
+  const BLOCK = 32;        // tilemap answers cover 32x32 tiles per request
+  const tilemapCache = new Map();
+
+  function tilemapBlock(z, row, col) {
+    const r0 = Math.floor(row / BLOCK) * BLOCK, c0 = Math.floor(col / BLOCK) * BLOCK;
+    const key = z + '/' + r0 + '/' + c0;
+    if (!tilemapCache.has(key)) {
+      tilemapCache.set(key, fetch(`${ESRI}/tilemap/${z}/${r0}/${c0}/${BLOCK}/${BLOCK}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then(j => (j && Array.isArray(j.data) && j.location ? j : null))
+        .catch(() => null));
+    }
+    return tilemapCache.get(key);
+  }
+
+  // true = photo exists, false = Esri says it doesn't, null = unknown (just try loading it).
+  async function hasTile(z, row, col) {
+    const j = await tilemapBlock(z, row, col);
+    if (!j) return null;
+    const { left, top, width, height } = j.location;
+    if (col < left || row < top || col >= left + width || row >= top + height) return null;
+    return j.data[(row - top) * width + (col - left)] === 1;
+  }
+
+  // How many levels to go up from tile (z, x, y) to reach a real photo.
+  async function levelsUp(z, x, y) {
+    const n = Math.min(MAX_UPSCALE, z);
+    const checks = [];
+    for (let d = 0; d <= n; d++) checks.push(hasTile(z - d, y >> d, x >> d));
+    const res = await Promise.all(checks);
+    const d = res.findIndex(ok => ok !== false);
+    return d === -1 ? 0 : d;
+  }
+
+  const EsriImagery = L.GridLayer.extend({
+    createTile(coords, done) {
+      const tile = document.createElement('div');
+      tile.style.overflow = 'hidden';
+      levelsUp(coords.z, coords.x, coords.y).then(d => this._draw(tile, coords, d, done));
+      return tile;
+    },
+    // Draw the right piece of the ancestor tile `d` levels up, scaled to fill this tile.
+    _draw(tile, c, d, done) {
+      const size = this.getTileSize(), k = 1 << d;
+      const z = c.z - d, x = c.x >> d, y = c.y >> d;
+      const img = new Image();
+      img.alt = '';
+      Object.assign(img.style, {
+        position: 'absolute', maxWidth: 'none',
+        width: size.x * k + 'px', height: size.y * k + 'px',
+        left: -(c.x - x * k) * size.x + 'px', top: -(c.y - y * k) * size.y + 'px',
+      });
+      img.onload = () => { tile.replaceChildren(img); done(null, tile); };
+      // blankTile=false: Esri answers 404 instead of a blank tile, so we can go up a level.
+      img.onerror = () => (d < MAX_UPSCALE && z > 0
+        ? this._draw(tile, c, d + 1, done)
+        : done(new Error('no imagery'), tile));
+      img.src = `${ESRI}/tile/${z}/${y}/${x}?blankTile=false`;
+    },
+  });
+
+  new EsriImagery({
+    maxZoom: 22,
     attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics',
   }).addTo(map);
   // Road / place labels on top of the imagery so you can find your way around.
   const labels = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
-    maxNativeZoom: 19, maxZoom: 21, opacity: 0.8,
+    maxNativeZoom: 19, maxZoom: 22, opacity: 0.8,
   }).addTo(map);
   L.control.layers(null, { 'Labels': labels }, { position: 'bottomright' }).addTo(map);
 
