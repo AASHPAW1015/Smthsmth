@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Area Calculator</title>
+<meta name="theme-color" content="#111827">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<style>
+  :root {
+    --bg: #111827; --panel: rgba(17,24,39,.92); --fg: #f9fafb; --muted: #9ca3af;
+    --accent: #facc15; --danger: #ef4444; --ok: #22c55e;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: system-ui, -apple-system, Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
+  #map { position: fixed; inset: 0; }
+
+  #stats { position: fixed; top: max(10px, env(safe-area-inset-top)); left: 10px; right: 10px; z-index: 1000;
+    background: var(--panel); border-radius: 14px; padding: 10px 14px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  #areaMain { font-size: 26px; font-weight: 700; color: var(--accent); cursor: pointer; user-select: none; }
+  #areaMain small { font-size: 13px; color: var(--muted); font-weight: 400; margin-left: 6px; }
+  #areaAlt, #perim { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  #warn { font-size: 13px; color: var(--danger); margin-top: 4px; display: none; }
+  #gpsInfo { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1000;
+    padding: 8px 8px max(8px, env(safe-area-inset-bottom)); background: var(--panel);
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  #bar button { background: #1f2937; color: var(--fg); border: 0; border-radius: 12px;
+    padding: 8px 2px; font-size: 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  #bar button .ic { font-size: 20px; line-height: 1; }
+  #bar button:active { background: #374151; }
+  #bar button.on { background: var(--accent); color: #111; }
+  #bar button:disabled { opacity: .4; }
+
+  #toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); z-index: 1100;
+    background: #000c; color: #fff; padding: 8px 14px; border-radius: 20px; font-size: 14px;
+    opacity: 0; transition: opacity .25s; pointer-events: none; white-space: nowrap; }
+  #toast.show { opacity: 1; }
+
+  .vtx { width: 22px; height: 22px; border-radius: 50%; background: var(--accent);
+    border: 3px solid #111; box-shadow: 0 0 0 2px #fff; display: flex; align-items: center;
+    justify-content: center; font-size: 10px; font-weight: 700; color: #111; }
+  .vtx.first { background: var(--ok); }
+  .me { width: 16px; height: 16px; border-radius: 50%; background: #3b82f6; border: 3px solid #fff;
+    box-shadow: 0 0 0 2px #3b82f6; }
+  .leaflet-control-attribution { font-size: 9px; }
+  .leaflet-bottom { bottom: 70px; }
+  .popbtn { background: var(--danger); color: #fff; border: 0; border-radius: 8px; padding: 6px 12px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="stats">
+  <div id="areaMain">Tap the map to add points</div>
+  <div id="areaAlt"></div>
+  <div id="perim"></div>
+  <div id="warn">⚠ Lines cross each other, so the area is wrong. Drag points to fix.</div>
+  <div id="gpsInfo"></div>
+</div>
+
+<div id="bar">
+  <button id="btnLock" title="Lock map taps"><span class="ic">✋</span><span>Adding</span></button>
+  <button id="btnGps"><span class="ic">📍</span><span>Add GPS pt</span></button>
+  <button id="btnLocate"><span class="ic">🎯</span><span>Find me</span></button>
+  <button id="btnUndo"><span class="ic">↩️</span><span>Undo</span></button>
+  <button id="btnClear"><span class="ic">🗑️</span><span>Clear</span></button>
+</div>
+<div id="toast"></div>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  // ---------- Map setup ----------
+  const STORE_KEY = 'areacalc.v1';
+  const saved = load();
+
+  const map = L.map('map', {
+    zoomControl: false,
+    center: saved.view ? saved.view.center : [20, 0],
+    zoom: saved.view ? saved.view.zoom : 3,
+    maxZoom: 21,
+  });
+
+  // Esri World Imagery: free satellite tiles, no API key needed.
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxNativeZoom: 19, maxZoom: 21,
+    attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics',
+  }).addTo(map);
+  // Road / place labels on top of the imagery so you can find your way around.
+  const labels = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+    maxNativeZoom: 19, maxZoom: 21, opacity: 0.8,
+  }).addTo(map);
+  L.control.layers(null, { 'Labels': labels }, { position: 'bottomright' }).addTo(map);
+
+  const polygon = L.polygon([], { color: '#facc15', weight: 3, fillOpacity: 0.25 }).addTo(map);
+  const markers = [];
+  let points = (saved.points || []).map(p => L.latLng(p[0], p[1]));
+  let locked = false;
+
+  // ---------- Geometry ----------
+  const R = 6378137; // WGS84 equatorial radius in metres
+  const rad = d => d * Math.PI / 180;
+
+  // Area of a polygon on the sphere (same method as Leaflet.draw / OpenLayers).
+  function geodesicArea(pts) {
+    if (pts.length < 3) return 0;
+    let a = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const p1 = pts[i], p2 = pts[(i + 1) % pts.length];
+      a += rad(p2.lng - p1.lng) * (2 + Math.sin(rad(p1.lat)) + Math.sin(rad(p2.lat)));
+    }
+    return Math.abs(a * R * R / 2);
+  }
+
+  function perimeter(pts) {
+    if (pts.length < 2) return 0;
+    let d = 0;
+    const n = pts.length < 3 ? pts.length - 1 : pts.length;
+    for (let i = 0; i < n; i++) d += pts[i].distanceTo(pts[(i + 1) % pts.length]);
+    return d;
+  }
+
+  // True if any two non-adjacent edges cross (area would be meaningless).
+  function selfIntersects(pts) {
+    const n = pts.length;
+    if (n < 4) return false;
+    const cross = (a, b, c) => (b.lng - a.lng) * (c.lat - a.lat) - (b.lat - a.lat) * (c.lng - a.lng);
+    const segX = (p1, p2, p3, p4) => {
+      const d1 = cross(p3, p4, p1), d2 = cross(p3, p4, p2), d3 = cross(p1, p2, p3), d4 = cross(p1, p2, p4);
+      return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0));
+    };
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        if (j === i + 1 || (i === 0 && j === n - 1)) continue; // adjacent edges
+        if (segX(pts[i], pts[(i + 1) % n], pts[j], pts[(j + 1) % n])) return true;
+      }
+    }
+    return false;
+  }
+
+  // ---------- Formatting ----------
+  const UNITS = [
+    { name: 'acres',    f: m2 => m2 / 4046.8564224, d: 3 },
+    { name: 'hectares', f: m2 => m2 / 10000,        d: 3 },
+    { name: 'm²',       f: m2 => m2,                d: 0 },
+    { name: 'ft²',      f: m2 => m2 * 10.7639104,   d: 0 },
+    { name: 'km²',      f: m2 => m2 / 1e6,          d: 4 },
+  ];
+  let unitIdx = saved.unitIdx || 0;
+  const fmt = (v, d) => v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+
+  function fmtDist(m) {
+    return m >= 1000 ? fmt(m / 1000, 2) + ' km' : fmt(m, 1) + ' m';
+  }
+
+  // ---------- Rendering ----------
+  function vertexIcon(i) {
+    return L.divIcon({
+      className: '', iconSize: [22, 22], iconAnchor: [11, 11],
+      html: `<div class="vtx${i === 0 ? ' first' : ''}">${i + 1}</div>`,
+    });
+  }
+
+  function redraw() {
+    markers.forEach(m => m.remove());
+    markers.length = 0;
+    points.forEach((p, i) => {
+      const m = L.marker(p, { icon: vertexIcon(i), draggable: true, autoPan: true }).addTo(map);
+      m.on('drag', e => { points[i] = e.target.getLatLng(); polygon.setLatLngs(points); updateStats(); });
+      m.on('dragend', () => save());
+      m.on('click', () => {
+        const div = L.DomUtil.create('div');
+        div.innerHTML = `<div style="margin-bottom:6px">Point ${i + 1}<br><small>${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}</small></div>`;
+        const b = L.DomUtil.create('button', 'popbtn', div);
+        b.textContent = 'Delete point';
+        L.DomEvent.on(b, 'click', ev => { L.DomEvent.stop(ev); map.closePopup(); points.splice(i, 1); changed(); });
+        L.popup({ offset: [0, -8] }).setLatLng(points[i]).setContent(div).openOn(map);
+      });
+      markers.push(m);
+    });
+    polygon.setLatLngs(points);
+    updateStats();
+  }
+
+  function updateStats() {
+    const area = geodesicArea(points);
+    const u = UNITS[unitIdx];
+    const main = document.getElementById('areaMain');
+    if (points.length < 3) {
+      main.innerHTML = points.length === 0 ? 'Tap the map to add points'
+        : `${points.length} point${points.length > 1 ? 's' : ''} &middot; need ${3 - points.length} more`;
+      document.getElementById('areaAlt').textContent = '';
+    } else {
+      main.innerHTML = `${fmt(u.f(area), u.d)} ${u.name}<small>tap to change units</small>`;
+      document.getElementById('areaAlt').textContent = UNITS
+        .filter((_, i) => i !== unitIdx && i < 4)
+        .map(x => `${fmt(x.f(area), x.d)} ${x.name}`).join('  ·  ');
+    }
+    document.getElementById('perim').textContent = points.length >= 2
+      ? `${points.length < 3 ? 'Length' : 'Perimeter'}: ${fmtDist(perimeter(points))}` : '';
+    document.getElementById('warn').style.display = selfIntersects(points) ? 'block' : 'none';
+    document.getElementById('btnUndo').disabled = points.length === 0;
+    document.getElementById('btnClear').disabled = points.length === 0;
+  }
+
+  function changed() { redraw(); save(); }
+
+  // ---------- Persistence ----------
+  function load() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch (e) { return {}; }
+  }
+  function save() {
+    try {
+      const c = map.getCenter();
+      localStorage.setItem(STORE_KEY, JSON.stringify({
+        points: points.map(p => [p.lat, p.lng]), unitIdx,
+        view: { center: [c.lat, c.lng], zoom: map.getZoom() },
+      }));
+    } catch (e) { /* storage unavailable: fine, just don't persist */ }
+  }
+  map.on('moveend', save);
+
+  // ---------- Toast ----------
+  let toastT;
+  function toast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2200);
+  }
+
+  // ---------- Interactions ----------
+  map.on('click', e => {
+    if (locked) return;
+    points.push(e.latlng);
+    changed();
+  });
+
+  document.getElementById('areaMain').addEventListener('click', () => {
+    if (points.length < 3) return;
+    unitIdx = (unitIdx + 1) % UNITS.length; updateStats(); save();
+  });
+
+  const btnLock = document.getElementById('btnLock');
+  btnLock.addEventListener('click', () => {
+    locked = !locked;
+    btnLock.classList.toggle('on', locked);
+    btnLock.querySelector('span:last-child').textContent = locked ? 'Locked' : 'Adding';
+    btnLock.querySelector('.ic').textContent = locked ? '🔒' : '✋';
+    toast(locked ? 'Taps no longer add points' : 'Tap the map to add points');
+  });
+
+  document.getElementById('btnUndo').addEventListener('click', () => { points.pop(); changed(); });
+  document.getElementById('btnClear').addEventListener('click', () => {
+    if (points.length && confirm('Clear all points?')) { points = []; changed(); }
+  });
+
+  // ---------- GPS ----------
+  let meMarker = null, accCircle = null, lastFix = null, watchId = null;
+
+  function showFix(pos) {
+    const ll = L.latLng(pos.coords.latitude, pos.coords.longitude);
+    lastFix = { ll, acc: pos.coords.accuracy, t: Date.now() };
+    if (!meMarker) {
+      meMarker = L.marker(ll, { icon: L.divIcon({ className: '', html: '<div class="me"></div>', iconSize: [16, 16], iconAnchor: [8, 8] }), interactive: false }).addTo(map);
+      accCircle = L.circle(ll, { radius: pos.coords.accuracy, color: '#3b82f6', weight: 1, fillOpacity: 0.1, interactive: false }).addTo(map);
+    } else {
+      meMarker.setLatLng(ll); accCircle.setLatLng(ll).setRadius(pos.coords.accuracy);
+    }
+    document.getElementById('gpsInfo').textContent = `GPS accuracy: ±${Math.round(pos.coords.accuracy)} m`;
+    return lastFix;
+  }
+
+  function startWatch() {
+    if (watchId !== null || !navigator.geolocation) return;
+    watchId = navigator.geolocation.watchPosition(showFix, err => toast('GPS: ' + err.message),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+  }
+
+  function getFix() {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) return reject(new Error('GPS not available'));
+      if (lastFix && Date.now() - lastFix.t < 3000) return resolve(lastFix);
+      navigator.geolocation.getCurrentPosition(p => resolve(showFix(p)), reject,
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+    });
+  }
+
+  document.getElementById('btnLocate').addEventListener('click', async () => {
+    toast('Finding you…');
+    try {
+      const f = await getFix();
+      startWatch();
+      map.setView(f.ll, Math.max(map.getZoom(), 18));
+    } catch (e) { toast('GPS: ' + e.message); }
+  });
+
+  // Walk the boundary and drop a point where you stand.
+  document.getElementById('btnGps').addEventListener('click', async () => {
+    toast('Getting GPS fix…');
+    try {
+      const f = await getFix();
+      startWatch();
+      points.push(f.ll);
+      changed();
+      if (!map.getBounds().contains(f.ll)) map.panTo(f.ll);
+      toast(`Point ${points.length} added (±${Math.round(f.acc)} m)`);
+    } catch (e) { toast('GPS: ' + e.message); }
+  });
+
+  // ---------- Start ----------
+  redraw();
+  if (points.length >= 1 && !saved.view) map.fitBounds(L.latLngBounds(points), { padding: [60, 60] });
+
+  // Expose for testing.
+  window.__areacalc = { geodesicArea, perimeter, selfIntersects, get points() { return points; } };
+})();
+</script>
+</body>
+</html>
