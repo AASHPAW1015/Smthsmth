@@ -3,7 +3,13 @@
 A personal, phone-friendly web app: look at satellite imagery, drop points, get the area.
 
 - **Tap the map** to add corner points (point 1 is green). Drag a point to move it, tap a point to delete it.
-- **📍 Add GPS pt** drops a point where you're standing, so you can walk a field's boundary.
+- **🚶 Walk** tracks you with GPS while you walk around a parcel, recording a point every few metres.
+  When you get back near where you started, the loop closes by itself and shows the area (or tap **⏹️ Stop**).
+  GPS jitter is cleaned up into a few corner points you can drag to fine-tune.
+  Keep the screen on and the app open while walking: browsers pause GPS when the screen is off.
+- **📍 GPS pt** drops a single point where you're standing.
+- Each side's **length is shown along the line** (feet with acres/ft², metres otherwise).
+- When zoomed in close, an **overview map** appears top-right with a red box showing where you are. Tap it to jump.
 - **🎯 Find me** centres the map on your location.
 - **✋ / 🔒** stops taps from adding points so you can pan around safely.
 - **Tap the big number** to switch units: acres, hectares, m², ft², km². Perimeter is shown too.

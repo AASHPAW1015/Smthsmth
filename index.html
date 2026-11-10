@@ -18,8 +18,16 @@
     font-family: system-ui, -apple-system, Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
   #map { position: fixed; inset: 0; }
 
-  #stats { position: fixed; top: max(10px, env(safe-area-inset-top)); left: 10px; right: 10px; z-index: 1000;
+  #top { position: fixed; top: max(10px, env(safe-area-inset-top)); left: 10px; right: 10px; z-index: 1000;
+    display: flex; flex-direction: column; align-items: flex-end; gap: 8px; pointer-events: none; }
+  #stats { align-self: stretch; pointer-events: auto;
     background: var(--panel); border-radius: 14px; padding: 10px 14px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  #mini { width: 120px; height: 120px; border-radius: 12px; overflow: hidden; pointer-events: auto;
+    border: 2px solid #fff; box-shadow: 0 4px 16px rgba(0,0,0,.5); display: none; background: #222; }
+  #walkInfo { font-size: 14px; color: #38bdf8; margin-top: 4px; font-weight: 600; display: none; }
+  .elabel { position: absolute; left: 0; top: 0; white-space: nowrap; pointer-events: none;
+    font-size: 12px; font-weight: 700; color: #fff; background: rgba(0,0,0,.6);
+    padding: 1px 6px; border-radius: 8px; transform-origin: 0 0; }
   #areaMain { font-size: 26px; font-weight: 700; color: var(--accent); cursor: pointer; user-select: none; }
   #areaMain small { font-size: 13px; color: var(--muted); font-weight: 400; margin-left: 6px; }
   #areaAlt, #perim { font-size: 13px; color: var(--muted); margin-top: 2px; }
@@ -28,13 +36,14 @@
 
   #bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1000;
     padding: 8px 8px max(8px, env(safe-area-inset-bottom)); background: var(--panel);
-    display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+    display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; }
   #bar button { background: #1f2937; color: var(--fg); border: 0; border-radius: 12px;
-    padding: 8px 2px; font-size: 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+    padding: 8px 1px; font-size: 11px; display: flex; flex-direction: column; align-items: center; gap: 3px; }
   #bar button .ic { font-size: 20px; line-height: 1; }
   #bar button:active { background: #374151; }
   #bar button.on { background: var(--accent); color: #111; }
   #bar button:disabled { opacity: .4; }
+  #bar button.walking { background: var(--danger); color: #fff; }
 
   #toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); z-index: 1100;
     background: #000c; color: #fff; padding: 8px 14px; border-radius: 20px; font-size: 14px;
@@ -55,17 +64,22 @@
 <body>
 <div id="map"></div>
 
-<div id="stats">
-  <div id="areaMain">Tap the map to add points</div>
-  <div id="areaAlt"></div>
-  <div id="perim"></div>
-  <div id="warn">⚠ Lines cross each other, so the area is wrong. Drag points to fix.</div>
-  <div id="gpsInfo"></div>
+<div id="top">
+  <div id="stats">
+    <div id="areaMain">Tap the map to add points</div>
+    <div id="areaAlt"></div>
+    <div id="perim"></div>
+    <div id="walkInfo"></div>
+    <div id="warn">⚠ Lines cross each other, so the area is wrong. Drag points to fix.</div>
+    <div id="gpsInfo"></div>
+  </div>
+  <div id="mini" title="Overview: the red box is what you're looking at"></div>
 </div>
 
 <div id="bar">
   <button id="btnLock" title="Lock map taps"><span class="ic">✋</span><span>Adding</span></button>
-  <button id="btnGps"><span class="ic">📍</span><span>Add GPS pt</span></button>
+  <button id="btnWalk"><span class="ic">🚶</span><span>Walk</span></button>
+  <button id="btnGps"><span class="ic">📍</span><span>GPS pt</span></button>
   <button id="btnLocate"><span class="ic">🎯</span><span>Find me</span></button>
   <button id="btnUndo"><span class="ic">↩️</span><span>Undo</span></button>
   <button id="btnClear"><span class="ic">🗑️</span><span>Clear</span></button>
@@ -170,6 +184,7 @@
   const markers = [];
   let points = (saved.points || []).map(p => L.latLng(p[0], p[1]));
   let locked = false;
+  let walk = null; // set while tracking a walk around the boundary
 
   // ---------- Geometry ----------
   const A_WGS84 = 6378137, E2_WGS84 = 0.00669437999014; // WGS84 ellipsoid
@@ -199,11 +214,19 @@
     return Math.abs(a * R * R / 2);
   }
 
+  // Distance in metres on the WGS84 ellipsoid (local radii of curvature). Exact to
+  // well under a centimetre for parcel-sized edges; fine up to tens of km.
+  function dist(a, b) {
+    const latm = rad((a.lat + b.lat) / 2), s = Math.sin(latm), w = Math.sqrt(1 - E2_WGS84 * s * s);
+    const M = A_WGS84 * (1 - E2_WGS84) / (w * w * w), N = A_WGS84 / w;
+    return Math.hypot(rad(b.lat - a.lat) * M, rad(b.lng - a.lng) * N * Math.cos(latm));
+  }
+
   function perimeter(pts) {
     if (pts.length < 2) return 0;
     let d = 0;
     const n = pts.length < 3 ? pts.length - 1 : pts.length;
-    for (let i = 0; i < n; i++) d += pts[i].distanceTo(pts[(i + 1) % pts.length]);
+    for (let i = 0; i < n; i++) d += dist(pts[i], pts[(i + 1) % pts.length]);
     return d;
   }
 
@@ -227,16 +250,21 @@
 
   // ---------- Formatting ----------
   const UNITS = [
-    { name: 'acres',    f: m2 => m2 / 4046.8564224, d: 3 },
+    { name: 'acres',    f: m2 => m2 / 4046.8564224, d: 3, imperial: true },
     { name: 'hectares', f: m2 => m2 / 10000,        d: 3 },
     { name: 'm²',       f: m2 => m2,                d: 0 },
-    { name: 'ft²',      f: m2 => m2 * 10.7639104,   d: 0 },
+    { name: 'ft²',      f: m2 => m2 * 10.7639104,   d: 0, imperial: true },
     { name: 'km²',      f: m2 => m2 / 1e6,          d: 4 },
   ];
   let unitIdx = saved.unitIdx || 0;
   const fmt = (v, d) => v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 
+  // Lengths follow the area unit: feet/miles with acres or ft², metres/km otherwise.
   function fmtDist(m) {
+    if (UNITS[unitIdx].imperial) {
+      const ft = m * 3.28083989;
+      return ft >= 5280 ? fmt(ft / 5280, 2) + ' mi' : fmt(ft, 1) + ' ft';
+    }
     return m >= 1000 ? fmt(m / 1000, 2) + ' km' : fmt(m, 1) + ' m';
   }
 
@@ -253,7 +281,7 @@
     markers.length = 0;
     points.forEach((p, i) => {
       const m = L.marker(p, { icon: vertexIcon(i), draggable: true, autoPan: true }).addTo(map);
-      m.on('drag', e => { points[i] = e.target.getLatLng(); polygon.setLatLngs(points); updateStats(); });
+      m.on('drag', e => { points[i] = e.target.getLatLng(); polygon.setLatLngs(points); drawEdgeLabels(); updateStats(); });
       m.on('dragend', () => save());
       m.on('click', () => {
         const div = L.DomUtil.create('div');
@@ -266,28 +294,66 @@
       markers.push(m);
     });
     polygon.setLatLngs(points);
+    drawEdgeLabels();
     updateStats();
   }
 
+  // Length of each side, written just above the middle of the line, along it.
+  const edgeLabels = L.layerGroup().addTo(map);
+  const MIN_LABEL_PX = 60; // skip sides too short on screen to fit a label
+  function drawEdgeLabels() {
+    edgeLabels.clearLayers();
+    const n = points.length;
+    if (n < 2 || walk) return;
+    const sides = n < 3 ? 1 : n;
+    for (let i = 0; i < sides; i++) {
+      const a = points[i], b = points[(i + 1) % n];
+      const pa = map.latLngToLayerPoint(a), pb = map.latLngToLayerPoint(b);
+      if (pa.distanceTo(pb) < MIN_LABEL_PX) continue;
+      let ang = Math.atan2(pb.y - pa.y, pb.x - pa.x) * 180 / Math.PI;
+      if (ang > 90) ang -= 180;        // keep text upright
+      else if (ang < -90) ang += 180;
+      L.marker(map.layerPointToLatLng(pa.add(pb).divideBy(2)), {
+        interactive: false, keyboard: false,
+        icon: L.divIcon({
+          className: '', iconSize: [0, 0],
+          html: `<div class="elabel" style="transform: rotate(${ang}deg) translate(-50%, calc(-100% - 4px))">${fmtDist(dist(a, b))}</div>`,
+        }),
+      }).addTo(edgeLabels);
+    }
+  }
+  map.on('zoomend', drawEdgeLabels);
+
   function updateStats() {
-    const area = geodesicArea(points);
+    const pts = walk ? walk.track : points;
+    const area = geodesicArea(pts);
     const u = UNITS[unitIdx];
     const main = document.getElementById('areaMain');
-    if (points.length < 3) {
-      main.innerHTML = points.length === 0 ? 'Tap the map to add points'
-        : `${points.length} point${points.length > 1 ? 's' : ''} &middot; need ${3 - points.length} more`;
+    if (pts.length < 3) {
+      main.innerHTML = walk ? 'Walking… keep going'
+        : pts.length === 0 ? 'Tap the map to add points'
+        : `${pts.length} point${pts.length > 1 ? 's' : ''} &middot; need ${3 - pts.length} more`;
       document.getElementById('areaAlt').textContent = '';
     } else {
-      main.innerHTML = `${fmt(u.f(area), u.d)} ${u.name}<small>tap to change units</small>`;
+      main.innerHTML = `${walk ? '≈ ' : ''}${fmt(u.f(area), u.d)} ${u.name}<small>tap to change units</small>`;
       document.getElementById('areaAlt').textContent = UNITS
         .filter((_, i) => i !== unitIdx && i < 4)
         .map(x => `${fmt(x.f(area), x.d)} ${x.name}`).join('  ·  ');
     }
-    document.getElementById('perim').textContent = points.length >= 2
-      ? `${points.length < 3 ? 'Length' : 'Perimeter'}: ${fmtDist(perimeter(points))}` : '';
-    document.getElementById('warn').style.display = selfIntersects(points) ? 'block' : 'none';
-    document.getElementById('btnUndo').disabled = points.length === 0;
-    document.getElementById('btnClear').disabled = points.length === 0;
+    document.getElementById('perim').textContent = pts.length >= 2 && !walk
+      ? `${pts.length < 3 ? 'Length' : 'Perimeter'}: ${fmtDist(perimeter(pts))}` : '';
+    const wi = document.getElementById('walkInfo');
+    wi.style.display = walk ? 'block' : 'none';
+    if (walk) {
+      const t = walk.track, back = lastFix && t.length ? dist(lastFix.ll, t[0]) : 0;
+      wi.textContent = `🚶 ${t.length} pts · walked ${fmtDist(walk.walked)}` +
+        (t.length > 1 ? ` · start is ${fmtDist(back)} away` : '') + (walk.waiting ? ` · ${walk.waiting}` : '');
+    }
+    document.getElementById('warn').style.display = selfIntersects(pts) ? 'block' : 'none';
+    document.getElementById('btnUndo').disabled = !!walk || points.length === 0;
+    document.getElementById('btnClear').disabled = !!walk || points.length === 0;
+    document.getElementById('btnGps').disabled = !!walk;
+    updateMiniShape();
   }
 
   function changed() { redraw(); save(); }
@@ -300,7 +366,7 @@
     try {
       const c = map.getCenter();
       localStorage.setItem(STORE_KEY, JSON.stringify({
-        points: points.map(p => [p.lat, p.lng]), unitIdx,
+        points: (walk ? walk.track : points).map(p => [p.lat, p.lng]), unitIdx,
         view: { center: [c.lat, c.lng], zoom: map.getZoom() },
       }));
     } catch (e) { /* storage unavailable: fine, just don't persist */ }
@@ -317,14 +383,14 @@
 
   // ---------- Interactions ----------
   map.on('click', e => {
-    if (locked) return;
+    if (locked || walk) return;
     points.push(e.latlng);
     changed();
   });
 
   document.getElementById('areaMain').addEventListener('click', () => {
-    if (points.length < 3) return;
-    unitIdx = (unitIdx + 1) % UNITS.length; updateStats(); save();
+    if ((walk ? walk.track : points).length < 3) return;
+    unitIdx = (unitIdx + 1) % UNITS.length; drawEdgeLabels(); updateStats(); save();
   });
 
   const btnLock = document.getElementById('btnLock');
@@ -344,6 +410,11 @@
   // ---------- GPS ----------
   let meMarker = null, accCircle = null, lastFix = null, watchId = null;
 
+  function gpsError(err) {
+    const why = { 1: 'location permission denied, allow it in Chrome site settings', 2: 'position unavailable', 3: 'timed out' }[err && err.code];
+    return 'GPS: ' + ((err && err.message) || why || 'error');
+  }
+
   function showFix(pos) {
     const ll = L.latLng(pos.coords.latitude, pos.coords.longitude);
     lastFix = { ll, acc: pos.coords.accuracy, t: Date.now() };
@@ -359,7 +430,7 @@
 
   function startWatch() {
     if (watchId !== null || !navigator.geolocation) return;
-    watchId = navigator.geolocation.watchPosition(showFix, err => toast('GPS: ' + err.message),
+    watchId = navigator.geolocation.watchPosition(showFix, err => toast(gpsError(err)),
       { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
   }
 
@@ -378,7 +449,7 @@
       const f = await getFix();
       startWatch();
       map.setView(f.ll, Math.max(map.getZoom(), 18));
-    } catch (e) { toast('GPS: ' + e.message); }
+    } catch (e) { toast(gpsError(e)); }
   });
 
   // Walk the boundary and drop a point where you stand.
@@ -391,15 +462,148 @@
       changed();
       if (!map.getBounds().contains(f.ll)) map.panTo(f.ll);
       toast(`Point ${points.length} added (±${Math.round(f.acc)} m)`);
-    } catch (e) { toast('GPS: ' + e.message); }
+    } catch (e) { toast(gpsError(e)); }
   });
+
+  // ---------- Walk the boundary ----------
+  // Track GPS while you walk around the parcel; a point is recorded every few metres.
+  // When you get back near where you started, the loop closes and the area is shown.
+  const WALK_STEP = 3;        // record a point after moving at least this many metres
+  const WALK_MAX_ACC = 25;    // ignore fixes worse than ±25 m
+  const WALK_CLOSE_MIN = 6;   // "back at the start" radius in metres (grows with poor GPS, max 15)
+  const WALK_SIMPLIFY = 1.5;  // drop points that deviate < 1.5 m from a straight line
+  const trackLine = L.polyline([], { color: '#38bdf8', weight: 4, dashArray: '8 6', interactive: false }).addTo(map);
+  const btnWalk = document.getElementById('btnWalk');
+  let wakeLock = null;
+
+  async function keepScreenOn() {
+    try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { /* not supported */ }
+  }
+  function letScreenSleep() {
+    try { if (wakeLock) wakeLock.release(); } catch (e) { /* ignore */ }
+    wakeLock = null;
+  }
+  // The wake lock is dropped when the page is hidden; take it again when it's back.
+  document.addEventListener('visibilitychange', () => {
+    if (walk && document.visibilityState === 'visible') keepScreenOn();
+  });
+
+  function setWalkButton(on) {
+    btnWalk.classList.toggle('walking', on);
+    btnWalk.querySelector('.ic').textContent = on ? '⏹️' : '🚶';
+    btnWalk.querySelector('span:last-child').textContent = on ? 'Stop' : 'Walk';
+  }
+
+  function startWalk() {
+    if (!navigator.geolocation) return toast('GPS not available');
+    if (points.length && !confirm('Start walking a new boundary? This clears the current shape.')) return;
+    points = []; redraw();
+    walk = { track: [], walked: 0, maxFromStart: 0, waiting: 'getting GPS…' };
+    walk.watchId = navigator.geolocation.watchPosition(onWalkFix, err => {
+      if (!walk) return;
+      if (err.code === 1) { toast(gpsError(err)); return finishWalk(false); }
+      walk.waiting = 'GPS signal lost, keep going…'; updateStats();
+    },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+    keepScreenOn();
+    setWalkButton(true);
+    updateStats();
+    toast('Walk along the boundary, keep this screen open');
+  }
+
+  function onWalkFix(pos) {
+    const f = showFix(pos);
+    if (!walk) return;
+    if (f.acc > WALK_MAX_ACC) {
+      walk.waiting = `weak GPS (±${Math.round(f.acc)} m), waiting…`;
+      return updateStats();
+    }
+    walk.waiting = '';
+    const t = walk.track, last = t[t.length - 1];
+    if (!last) map.setView(f.ll, Math.max(map.getZoom(), 18));
+    if (last && dist(last, f.ll) < WALK_STEP) return updateStats();
+    if (last) walk.walked += dist(last, f.ll);
+    t.push(f.ll);
+    const fromStart = dist(t[0], f.ll);
+    walk.maxFromStart = Math.max(walk.maxFromStart, fromStart);
+    trackLine.setLatLngs(t);
+    polygon.setLatLngs(t);
+    if (!map.getBounds().pad(-0.25).contains(f.ll)) map.panTo(f.ll);
+    save();
+    // Loop closed: we went properly away from the start and are now back near it.
+    const closeR = Math.max(WALK_CLOSE_MIN, Math.min(f.acc, 15));
+    if (t.length >= 4 && walk.maxFromStart > 2 * closeR + 10 && fromStart <= closeR) return finishWalk(true);
+    updateStats();
+  }
+
+  // Remove GPS jitter: keep only the points needed to describe the shape.
+  function simplifyTrack(lls) {
+    if (lls.length < 4) return lls.slice();
+    const o = lls[0], kx = 111320 * Math.cos(rad(o.lat)), ky = 110574;
+    const pts = lls.map((ll, i) => {
+      const p = L.point((ll.lng - o.lng) * kx, (ll.lat - o.lat) * ky);
+      p.i = i;
+      return p;
+    });
+    return L.LineUtil.simplify(pts, WALK_SIMPLIFY).map(p => lls[p.i]);
+  }
+
+  function finishWalk(closed) {
+    navigator.geolocation.clearWatch(walk.watchId);
+    letScreenSleep();
+    let t = walk.track;
+    // A last point practically on top of the first adds nothing: the shape closes itself.
+    if (t.length > 3 && dist(t[t.length - 1], t[0]) < WALK_CLOSE_MIN) t = t.slice(0, -1);
+    walk = null;
+    trackLine.setLatLngs([]);
+    setWalkButton(false);
+    points = simplifyTrack(t);
+    changed();
+    if (points.length >= 3) {
+      map.fitBounds(polygon.getBounds(), { padding: [60, 60], maxZoom: 20 });
+      toast(closed ? '✅ Loop closed! Drag points to fine-tune.' : 'Walk stopped, shape closed for you');
+    } else {
+      toast('Walk stopped: not enough points for an area');
+    }
+  }
+
+  btnWalk.addEventListener('click', () => (walk ? finishWalk(false) : startWalk()));
+
+  // ---------- Overview map (top right) ----------
+  // When zoomed in close, a small map shows the wider area with a red box for
+  // what's on screen, so you don't get lost. Tap it to jump there.
+  const MINI_FROM_ZOOM = 16, MINI_ZOOM_OUT = 4;
+  const miniEl = document.getElementById('mini');
+  const mini = L.map(miniEl, {
+    zoomControl: false, attributionControl: false, dragging: false, touchZoom: false,
+    scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false,
+    zoomAnimation: false, fadeAnimation: false, inertia: false,
+  });
+  new EsriImagery({ maxZoom: 22 }).addTo(mini);
+  const miniShape = L.polygon([], { color: '#facc15', weight: 2, fillOpacity: 0.2, interactive: false }).addTo(mini);
+  const miniBox = L.rectangle([[0, 0], [0, 0]], { color: '#ef4444', weight: 2, fillOpacity: 0.15, interactive: false }).addTo(mini);
+
+  function updateMini() {
+    const show = map.getZoom() >= MINI_FROM_ZOOM;
+    const wasHidden = miniEl.style.display !== 'block';
+    miniEl.style.display = show ? 'block' : 'none';
+    if (!show) return;
+    if (wasHidden) mini.invalidateSize();
+    mini.setView(map.getCenter(), map.getZoom() - MINI_ZOOM_OUT, { animate: false });
+    miniBox.setBounds(map.getBounds());
+    miniShape.setLatLngs(polygon.getLatLngs());
+  }
+  function updateMiniShape() { if (miniEl.style.display === 'block') miniShape.setLatLngs(polygon.getLatLngs()); }
+  map.on('move zoomend', updateMini);
+  mini.on('click', e => map.panTo(e.latlng));
 
   // ---------- Start ----------
   redraw();
+  updateMini();
   if (points.length >= 1 && !saved.view) map.fitBounds(L.latLngBounds(points), { padding: [60, 60] });
 
   // Expose for testing.
-  window.__areacalc = { geodesicArea, perimeter, selfIntersects, get points() { return points; } };
+  window.__areacalc = { geodesicArea, perimeter, selfIntersects, dist, simplifyTrack, get points() { return points; }, get walk() { return walk; } };
 })();
 </script>
 </body>
