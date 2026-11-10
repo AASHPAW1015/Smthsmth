@@ -54,6 +54,18 @@
     border: 3px solid #111; box-shadow: 0 0 0 2px #fff; display: flex; align-items: center;
     justify-content: center; font-size: 10px; font-weight: 700; color: #111; }
   .vtx.first { background: var(--ok); }
+  .vtx.mark { background: var(--danger); color: #fff; }
+  #sheet { position: fixed; inset: 0; z-index: 1200; background: rgba(0,0,0,.5);
+    display: flex; align-items: flex-end; }
+  #sheet[hidden] { display: none; }
+  #sheet .card { width: 100%; background: #111827; border-radius: 18px 18px 0 0;
+    padding: 12px 12px max(12px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; }
+  #sheet button { background: #1f2937; color: var(--fg); border: 0; border-radius: 12px; padding: 14px;
+    font-size: 16px; text-align: left; }
+  #sheet button small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  #sheet button.danger { color: #fca5a5; }
+  #sheet button:disabled { opacity: .4; }
+  #sheet button[data-act="close"] { text-align: center; background: transparent; }
   .me { width: 16px; height: 16px; border-radius: 50%; background: #3b82f6; border: 3px solid #fff;
     box-shadow: 0 0 0 2px #3b82f6; }
   .leaflet-control-attribution { font-size: 9px; }
@@ -79,11 +91,22 @@
 <div id="bar">
   <button id="btnLock" title="Lock map taps"><span class="ic">✋</span><span>Adding</span></button>
   <button id="btnWalk"><span class="ic">🚶</span><span>Walk</span></button>
-  <button id="btnGps"><span class="ic">📍</span><span>GPS pt</span></button>
+  <button id="btnMark"><span class="ic">📌</span><span>Mark</span></button>
   <button id="btnLocate"><span class="ic">🎯</span><span>Find me</span></button>
   <button id="btnUndo"><span class="ic">↩️</span><span>Undo</span></button>
-  <button id="btnClear"><span class="ic">🗑️</span><span>Clear</span></button>
+  <button id="btnMore"><span class="ic">☰</span><span>More</span></button>
 </div>
+
+<div id="sheet" hidden>
+  <div class="card">
+    <button data-act="saveGeo">💾 Save to phone <small>.geojson · open it here again later</small></button>
+    <button data-act="saveKml">🌍 Save for Google Earth <small>.kml</small></button>
+    <button data-act="open">📂 Open a saved file <small>.geojson, .kml, or .gpx from a GPS logger</small></button>
+    <button data-act="clear" class="danger">🗑️ Clear all points</button>
+    <button data-act="close">Close</button>
+  </div>
+</div>
+<input type="file" id="fileIn" hidden>
 <div id="toast"></div>
 
 <script src="vendor/leaflet/leaflet.js"></script>
@@ -182,7 +205,7 @@
 
   const polygon = L.polygon([], { color: '#facc15', weight: 3, fillOpacity: 0.25 }).addTo(map);
   const markers = [];
-  let points = (saved.points || []).map(p => L.latLng(p[0], p[1]));
+  let points = (saved.points || []).map(a => deser(a));
   let locked = false;
   let walk = null; // set while tracking a walk around the boundary
 
@@ -268,11 +291,23 @@
     return m >= 1000 ? fmt(m / 1000, 2) + ' km' : fmt(m, 1) + ' m';
   }
 
+  // ---------- Points ----------
+  // Points are Leaflet LatLngs with optional extras: acc (GPS accuracy in m, when the
+  // point came from GPS) and mark (placed with the 📌 Mark button; never simplified away).
+  function mkPt(lat, lng, acc, mark) {
+    const p = L.latLng(lat, lng);
+    if (acc != null && isFinite(acc)) p.acc = acc;
+    if (mark) p.mark = true;
+    return p;
+  }
+  const ser = p => [p.lat, p.lng, p.acc != null ? p.acc : null, p.mark ? 1 : 0];
+  const deser = a => mkPt(a[0], a[1], a[2], a[3]);
+
   // ---------- Rendering ----------
-  function vertexIcon(i) {
+  function vertexIcon(i, p) {
     return L.divIcon({
       className: '', iconSize: [22, 22], iconAnchor: [11, 11],
-      html: `<div class="vtx${i === 0 ? ' first' : ''}">${i + 1}</div>`,
+      html: `<div class="vtx${p.mark ? ' mark' : i === 0 ? ' first' : ''}">${i + 1}</div>`,
     });
   }
 
@@ -280,16 +315,23 @@
     markers.forEach(m => m.remove());
     markers.length = 0;
     points.forEach((p, i) => {
-      const m = L.marker(p, { icon: vertexIcon(i), draggable: true, autoPan: true }).addTo(map);
-      m.on('drag', e => { points[i] = e.target.getLatLng(); polygon.setLatLngs(points); drawEdgeLabels(); updateStats(); });
+      const m = L.marker(p, { icon: vertexIcon(i, p), draggable: true, autoPan: true }).addTo(map);
+      m.on('drag', e => {
+        const ll = e.target.getLatLng();
+        points[i] = mkPt(ll.lat, ll.lng, null, points[i].mark); // moved by hand: no longer a GPS reading
+        polygon.setLatLngs(points); drawEdgeLabels(); updateStats();
+      });
       m.on('dragend', () => save());
       m.on('click', () => {
+        const q = points[i];
         const div = L.DomUtil.create('div');
-        div.innerHTML = `<div style="margin-bottom:6px">Point ${i + 1}<br><small>${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}</small></div>`;
+        div.innerHTML = `<div style="margin-bottom:6px"><b>Point ${i + 1}</b>${q.mark ? ' 📌' : ''}<br>` +
+          `<small>${q.lat.toFixed(7)}, ${q.lng.toFixed(7)}` +
+          (q.acc != null ? `<br>GPS accuracy ±${q.acc.toFixed(1)} m` : '') + '</small></div>';
         const b = L.DomUtil.create('button', 'popbtn', div);
         b.textContent = 'Delete point';
         L.DomEvent.on(b, 'click', ev => { L.DomEvent.stop(ev); map.closePopup(); points.splice(i, 1); changed(); });
-        L.popup({ offset: [0, -8] }).setLatLng(points[i]).setContent(div).openOn(map);
+        L.popup({ offset: [0, -8] }).setLatLng(q).setContent(div).openOn(map);
       });
       markers.push(m);
     });
@@ -324,6 +366,11 @@
   }
   map.on('zoomend', drawEdgeLabels);
 
+  function fmtTime(ms) {
+    const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, ss = s % 60;
+    return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(ss).padStart(2, '0');
+  }
+
   function updateStats() {
     const pts = walk ? walk.track : points;
     const area = geodesicArea(pts);
@@ -346,19 +393,19 @@
     wi.style.display = walk ? 'block' : 'none';
     if (walk) {
       const t = walk.track, back = lastFix && t.length ? dist(lastFix.ll, t[0]) : 0;
-      wi.textContent = `🚶 ${t.length} pts · walked ${fmtDist(walk.walked)}` +
-        (t.length > 1 ? ` · start is ${fmtDist(back)} away` : '') + (walk.waiting ? ` · ${walk.waiting}` : '');
+      const marks = t.filter(p => p.mark).length;
+      wi.textContent = `🚶 ⏱ ${fmtTime(Date.now() - walk.startedAt)} · ${t.length} pts` + (marks ? ` · ${marks} 📌` : '') +
+        ` · walked ${fmtDist(walk.walked)}` + (t.length > 1 ? ` · start ${fmtDist(back)} away` : '') +
+        (walk.waiting ? ` · ${walk.waiting}` : '');
     }
     document.getElementById('warn').style.display = selfIntersects(pts) ? 'block' : 'none';
     document.getElementById('btnUndo').disabled = !!walk || points.length === 0;
-    document.getElementById('btnClear').disabled = !!walk || points.length === 0;
-    document.getElementById('btnGps').disabled = !!walk;
     updateMiniShape();
   }
 
   function changed() { redraw(); save(); }
 
-  // ---------- Persistence ----------
+  // ---------- Persistence (on this phone) ----------
   function load() {
     try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch (e) { return {}; }
   }
@@ -366,8 +413,10 @@
     try {
       const c = map.getCenter();
       localStorage.setItem(STORE_KEY, JSON.stringify({
-        points: (walk ? walk.track : points).map(p => [p.lat, p.lng]), unitIdx,
+        points: points.map(ser), unitIdx,
         view: { center: [c.lat, c.lng], zoom: map.getZoom() },
+        // An unfinished walk is kept after every GPS point, so it survives the page being closed.
+        walk: walk ? { track: walk.track.map(ser), walked: walk.walked, maxFromStart: walk.maxFromStart, startedAt: walk.startedAt } : null,
       }));
     } catch (e) { /* storage unavailable: fine, just don't persist */ }
   }
@@ -375,10 +424,10 @@
 
   // ---------- Toast ----------
   let toastT;
-  function toast(msg) {
+  function toast(msg, ms) {
     const t = document.getElementById('toast');
     t.textContent = msg; t.classList.add('show');
-    clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2200);
+    clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), ms || 2500);
   }
 
   // ---------- Interactions ----------
@@ -403,9 +452,6 @@
   });
 
   document.getElementById('btnUndo').addEventListener('click', () => { points.pop(); changed(); });
-  document.getElementById('btnClear').addEventListener('click', () => {
-    if (points.length && confirm('Clear all points?')) { points = []; changed(); }
-  });
 
   // ---------- GPS ----------
   let meMarker = null, accCircle = null, lastFix = null, watchId = null;
@@ -413,6 +459,10 @@
   function gpsError(err) {
     const why = { 1: 'location permission denied, allow it in Chrome site settings', 2: 'position unavailable', 3: 'timed out' }[err && err.code];
     return 'GPS: ' + ((err && err.message) || why || 'error');
+  }
+
+  function gpsQuality(acc) {
+    return acc <= 5 ? 'excellent' : acc <= 10 ? 'good' : acc <= 20 ? 'fair' : 'poor';
   }
 
   function showFix(pos) {
@@ -424,13 +474,14 @@
     } else {
       meMarker.setLatLng(ll); accCircle.setLatLng(ll).setRadius(pos.coords.accuracy);
     }
-    document.getElementById('gpsInfo').textContent = `GPS accuracy: ±${Math.round(pos.coords.accuracy)} m`;
+    const a = pos.coords.accuracy;
+    document.getElementById('gpsInfo').textContent = `GPS accuracy: ±${a < 10 ? a.toFixed(1) : Math.round(a)} m (${gpsQuality(a)})`;
     return lastFix;
   }
 
   function startWatch() {
     if (watchId !== null || !navigator.geolocation) return;
-    watchId = navigator.geolocation.watchPosition(showFix, err => toast(gpsError(err)),
+    watchId = navigator.geolocation.watchPosition(showFix, err => { if (err.code === 1) toast(gpsError(err)); },
       { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
   }
 
@@ -452,18 +503,35 @@
     } catch (e) { toast(gpsError(e)); }
   });
 
-  // Walk the boundary and drop a point where you stand.
-  document.getElementById('btnGps').addEventListener('click', async () => {
-    toast('Getting GPS fix…');
-    try {
-      const f = await getFix();
-      startWatch();
-      points.push(f.ll);
+  // 📌 Mark: put a point exactly where you are right now. GPS keeps running after the
+  // first mark (and always during a walk), so later marks are instant.
+  async function addMark() {
+    let f = lastFix && Date.now() - lastFix.t < 10000 ? lastFix : null;
+    if (!f) {
+      toast('Getting GPS fix…');
+      try { f = await getFix(); } catch (e) { return toast(gpsError(e)); }
+    }
+    startWatch();
+    const p = mkPt(f.ll.lat, f.ll.lng, f.acc, true);
+    const accTxt = `±${f.acc < 10 ? f.acc.toFixed(1) : Math.round(f.acc)} m`;
+    if (walk) {
+      const t = walk.track, last = t[t.length - 1];
+      if (last) walk.walked += dist(last, p);
+      t.push(p);
+      walk.maxFromStart = Math.max(walk.maxFromStart, dist(t[0], p));
+      trackLine.setLatLngs(t); polygon.setLatLngs(t);
+      L.circleMarker(p, { radius: 7, color: '#fff', weight: 2, fillColor: '#ef4444', fillOpacity: 1, interactive: false }).addTo(walkMarks);
+      save(); updateStats();
+      toast(`📌 Mark ${t.filter(q => q.mark).length} saved (${accTxt})`);
+    } else {
+      points.push(p);
       changed();
-      if (!map.getBounds().contains(f.ll)) map.panTo(f.ll);
-      toast(`Point ${points.length} added (±${Math.round(f.acc)} m)`);
-    } catch (e) { toast(gpsError(e)); }
-  });
+      if (!map.getBounds().contains(p)) map.panTo(p);
+      toast(`📌 Point ${points.length} marked (${accTxt})`);
+    }
+    if (navigator.vibrate) navigator.vibrate(60);
+  }
+  document.getElementById('btnMark').addEventListener('click', addMark);
 
   // ---------- Walk the boundary ----------
   // Track GPS while you walk around the parcel; a point is recorded every few metres.
@@ -472,20 +540,34 @@
   const WALK_MAX_ACC = 25;    // ignore fixes worse than ±25 m
   const WALK_CLOSE_MIN = 6;   // "back at the start" radius in metres (grows with poor GPS, max 15)
   const WALK_SIMPLIFY = 1.5;  // drop points that deviate < 1.5 m from a straight line
+  const WALK_STALL_MS = 20000; // no GPS for this long while on screen: restart GPS
   const trackLine = L.polyline([], { color: '#38bdf8', weight: 4, dashArray: '8 6', interactive: false }).addTo(map);
+  const walkMarks = L.layerGroup().addTo(map);
   const btnWalk = document.getElementById('btnWalk');
   let wakeLock = null;
 
   async function keepScreenOn() {
-    try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) { /* not supported */ }
+    try { if (navigator.wakeLock && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } } catch (e) { /* not supported or not allowed right now */ }
   }
   function letScreenSleep() {
     try { if (wakeLock) wakeLock.release(); } catch (e) { /* ignore */ }
     wakeLock = null;
   }
-  // The wake lock is dropped when the page is hidden; take it again when it's back.
+
+  // Chrome pauses a page's GPS when the screen turns off or you switch apps.
+  // Note how long that lasted, and restart GPS + screen lock as soon as we're back.
   document.addEventListener('visibilitychange', () => {
-    if (walk && document.visibilityState === 'visible') keepScreenOn();
+    if (!walk) return;
+    if (document.visibilityState === 'hidden') { walk.hiddenAt = Date.now(); save(); return; }
+    keepScreenOn();
+    restartWalkWatch();
+    if (walk.hiddenAt && Date.now() - walk.hiddenAt > 15000) {
+      toast(`⚠ GPS was paused for ${fmtTime(Date.now() - walk.hiddenAt)} while the app was hidden. Keep it on screen.`, 6000);
+    }
+    walk.hiddenAt = null;
   });
 
   function setWalkButton(on) {
@@ -494,26 +576,53 @@
     btnWalk.querySelector('span:last-child').textContent = on ? 'Stop' : 'Walk';
   }
 
-  function startWalk() {
-    if (!navigator.geolocation) return toast('GPS not available');
-    if (points.length && !confirm('Start walking a new boundary? This clears the current shape.')) return;
-    points = []; redraw();
-    walk = { track: [], walked: 0, maxFromStart: 0, waiting: 'getting GPS…' };
+  function restartWalkWatch() {
+    if (!walk) return;
+    if (walk.watchId != null) navigator.geolocation.clearWatch(walk.watchId);
+    walk.lastFixAt = Date.now();
     walk.watchId = navigator.geolocation.watchPosition(onWalkFix, err => {
       if (!walk) return;
       if (err.code === 1) { toast(gpsError(err)); return finishWalk(false); }
       walk.waiting = 'GPS signal lost, keep going…'; updateStats();
-    },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+    }, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+  }
+
+  // Every few seconds: refresh the timer, and restart GPS if it has gone quiet.
+  setInterval(() => {
+    if (!walk || document.visibilityState !== 'visible') return;
+    if (Date.now() - walk.lastFixAt > WALK_STALL_MS) {
+      walk.waiting = 'reconnecting GPS…';
+      restartWalkWatch();
+    }
+    updateStats();
+  }, 5000);
+
+  function beginWalk(state) {
+    walk = Object.assign({ track: [], walked: 0, maxFromStart: 0, startedAt: Date.now() }, state,
+      { waiting: 'getting GPS…', watchId: null, hiddenAt: null });
+    trackLine.setLatLngs(walk.track); polygon.setLatLngs(walk.track);
+    walkMarks.clearLayers();
+    walk.track.filter(p => p.mark).forEach(p =>
+      L.circleMarker(p, { radius: 7, color: '#fff', weight: 2, fillColor: '#ef4444', fillOpacity: 1, interactive: false }).addTo(walkMarks));
+    restartWalkWatch();
     keepScreenOn();
     setWalkButton(true);
-    updateStats();
-    toast('Walk along the boundary, keep this screen open');
+    redraw();
+    save();
+  }
+
+  function startWalk() {
+    if (!navigator.geolocation) return toast('GPS not available');
+    if (points.length && !confirm('Start walking a new boundary? This clears the current shape (save it first from ☰ More if you want to keep it).')) return;
+    points = [];
+    beginWalk({});
+    toast('Walk the boundary. Keep this screen on. Tap 📌 Mark at corners.', 4000);
   }
 
   function onWalkFix(pos) {
     const f = showFix(pos);
     if (!walk) return;
+    walk.lastFixAt = Date.now();
     if (f.acc > WALK_MAX_ACC) {
       walk.waiting = `weak GPS (±${Math.round(f.acc)} m), waiting…`;
       return updateStats();
@@ -522,13 +631,14 @@
     const t = walk.track, last = t[t.length - 1];
     if (!last) map.setView(f.ll, Math.max(map.getZoom(), 18));
     if (last && dist(last, f.ll) < WALK_STEP) return updateStats();
-    if (last) walk.walked += dist(last, f.ll);
-    t.push(f.ll);
-    const fromStart = dist(t[0], f.ll);
+    const p = mkPt(f.ll.lat, f.ll.lng, f.acc);
+    if (last) walk.walked += dist(last, p);
+    t.push(p);
+    const fromStart = dist(t[0], p);
     walk.maxFromStart = Math.max(walk.maxFromStart, fromStart);
     trackLine.setLatLngs(t);
     polygon.setLatLngs(t);
-    if (!map.getBounds().pad(-0.25).contains(f.ll)) map.panTo(f.ll);
+    if (!map.getBounds().pad(-0.25).contains(p)) map.panTo(p);
     save();
     // Loop closed: we went properly away from the start and are now back near it.
     const closeR = Math.max(WALK_CLOSE_MIN, Math.min(f.acc, 15));
@@ -537,8 +647,8 @@
   }
 
   // Remove GPS jitter: keep only the points needed to describe the shape.
-  function simplifyTrack(lls) {
-    if (lls.length < 4) return lls.slice();
+  function simplifyLine(lls) {
+    if (lls.length < 3) return lls.slice();
     const o = lls[0], kx = 111320 * Math.cos(rad(o.lat)), ky = 110574;
     const pts = lls.map((ll, i) => {
       const p = L.point((ll.lng - o.lng) * kx, (ll.lat - o.lat) * ky);
@@ -547,27 +657,217 @@
     });
     return L.LineUtil.simplify(pts, WALK_SIMPLIFY).map(p => lls[p.i]);
   }
+  // Same, but 📌 marks are always kept: simplify the stretches between them separately.
+  // The shape is a closed loop, so the stretch back to the start is cleaned up too.
+  function simplifyTrack(lls) {
+    if (lls.length < 4) return lls.slice();
+    lls = [...lls, lls[0]];
+    const out = [];
+    let seg = [lls[0]];
+    for (let i = 1; i < lls.length; i++) {
+      seg.push(lls[i]);
+      if (lls[i].mark || i === lls.length - 1) {
+        const s = simplifyLine(seg);
+        out.push(...(out.length ? s.slice(1) : s));
+        seg = [lls[i]];
+      }
+    }
+    return out.slice(0, -1); // drop the repeated start point
+  }
 
   function finishWalk(closed) {
-    navigator.geolocation.clearWatch(walk.watchId);
+    if (walk.watchId != null) navigator.geolocation.clearWatch(walk.watchId);
     letScreenSleep();
     let t = walk.track;
     // A last point practically on top of the first adds nothing: the shape closes itself.
-    if (t.length > 3 && dist(t[t.length - 1], t[0]) < WALK_CLOSE_MIN) t = t.slice(0, -1);
+    if (t.length > 3 && !t[t.length - 1].mark && dist(t[t.length - 1], t[0]) < WALK_CLOSE_MIN) t = t.slice(0, -1);
     walk = null;
     trackLine.setLatLngs([]);
+    walkMarks.clearLayers();
     setWalkButton(false);
     points = simplifyTrack(t);
     changed();
     if (points.length >= 3) {
       map.fitBounds(polygon.getBounds(), { padding: [60, 60], maxZoom: 20 });
-      toast(closed ? '✅ Loop closed! Drag points to fine-tune.' : 'Walk stopped, shape closed for you');
+      toast((closed ? '✅ Loop closed!' : 'Walk stopped, shape closed for you.') + ' Save it from ☰ More.', 4000);
     } else {
       toast('Walk stopped: not enough points for an area');
     }
   }
 
-  btnWalk.addEventListener('click', () => (walk ? finishWalk(false) : startWalk()));
+  btnWalk.addEventListener('click', () => {
+    if (!walk) return startWalk();
+    if (confirm('Stop walking and close the shape?')) finishWalk(false);
+  });
+
+  // ---------- Save / open files ----------
+  const sheet = document.getElementById('sheet');
+  const fileIn = document.getElementById('fileIn');
+  const r8 = x => Math.round(x * 1e8) / 1e8;   // 8 decimals ≈ 1 mm, far finer than any GPS
+  const rnd = (x, d) => Math.round(x * 10 ** d) / 10 ** d;
+  const xmlEsc = s => String(s).replace(/[<>&'"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[c]));
+
+  function stamp() {
+    const d = new Date(), z = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}.${z(d.getMinutes())}`;
+  }
+
+  function summary() {
+    const a = geodesicArea(points);
+    return {
+      area_m2: rnd(a, 2), area_acres: rnd(a / 4046.8564224, 4), area_hectares: rnd(a / 1e4, 4),
+      perimeter_m: rnd(perimeter(points), 2),
+    };
+  }
+
+  function toGeoJSON(name) {
+    const c = points.map(p => [r8(p.lng), r8(p.lat)]);
+    const geometry = points.length >= 3 ? { type: 'Polygon', coordinates: [[...c, c[0]]] }
+      : points.length === 2 ? { type: 'LineString', coordinates: c }
+      : { type: 'Point', coordinates: c[0] };
+    return JSON.stringify({
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature', geometry,
+        properties: Object.assign({ name, app: 'Area Calculator', saved_at: new Date().toISOString() }, summary(), {
+          points: points.map((p, i) => ({
+            n: i + 1, lat: r8(p.lat), lng: r8(p.lng),
+            gps_accuracy_m: p.acc != null ? rnd(p.acc, 1) : null, mark: !!p.mark,
+          })),
+        }),
+      }],
+    }, null, 1);
+  }
+
+  function toKML(name) {
+    const s = summary();
+    const coords = [...points, points[0]].map(p => `${r8(p.lng)},${r8(p.lat)},0`).join(' ');
+    const shape = points.length >= 3
+      ? `<Polygon><outerBoundaryIs><LinearRing><coordinates>${coords}</coordinates></LinearRing></outerBoundaryIs></Polygon>`
+      : `<LineString><coordinates>${points.map(p => `${r8(p.lng)},${r8(p.lat)},0`).join(' ')}</coordinates></LineString>`;
+    const pins = points.map((p, i) =>
+      `<Placemark><name>${i + 1}${p.mark ? ' 📌' : ''}</name>` +
+      (p.acc != null ? `<description>GPS accuracy ±${rnd(p.acc, 1)} m</description>` : '') +
+      `<Point><coordinates>${r8(p.lng)},${r8(p.lat)},0</coordinates></Point></Placemark>`).join('\n');
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${xmlEsc(name)}</name>
+<Style id="area"><LineStyle><color>ff15ccfa</color><width>3</width></LineStyle><PolyStyle><color>4015ccfa</color></PolyStyle></Style>
+<Placemark><name>${xmlEsc(name)}</name><styleUrl>#area</styleUrl>
+<description>Area: ${s.area_m2} m² = ${s.area_acres} acres = ${s.area_hectares} ha. Perimeter: ${s.perimeter_m} m</description>
+${shape}</Placemark>
+<Folder><name>Points</name>
+${pins}
+</Folder></Document></kml>`;
+  }
+
+  function download(filename, text, mime) {
+    const url = URL.createObjectURL(new Blob([text], { type: mime }));
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
+
+  function saveFile(kind) {
+    if (!points.length) return toast('Nothing to save yet');
+    const name = prompt('Name for this shape:', `Parcel ${stamp()}`);
+    if (name === null) return;
+    const base = (name.trim() || `Parcel ${stamp()}`).replace(/[\\/:*?"<>|]+/g, '-');
+    if (kind === 'kml') download(base + '.kml', toKML(name), 'application/vnd.google-earth.kml+xml');
+    else download(base + '.geojson', toGeoJSON(name), 'application/geo+json');
+    toast('Saved to your Downloads folder');
+  }
+
+  // Read GeoJSON (ours or any), KML (Google Earth) or GPX (GPS logger apps).
+  function parseShapeFile(text) {
+    text = text.replace(/^﻿/, '').trim();
+    let pts = [], name = '', ours = false, track = false;
+    if (text[0] === '{' || text[0] === '[') {
+      const j = JSON.parse(text);
+      const feats = j.type === 'FeatureCollection' ? j.features : j.type === 'Feature' ? [j] : [{ geometry: j, properties: {} }];
+      const geomOf = f => f && f.geometry;
+      const pick = types => feats.find(f => geomOf(f) && types.includes(geomOf(f).type));
+      let f = pick(['Polygon', 'MultiPolygon']);
+      if (f) {
+        const g = f.geometry;
+        pts = (g.type === 'Polygon' ? g.coordinates[0] : g.coordinates[0][0]).map(c => mkPt(c[1], c[0]));
+      } else if ((f = pick(['LineString', 'MultiLineString']))) {
+        const g = f.geometry;
+        pts = (g.type === 'LineString' ? g.coordinates : g.coordinates[0]).map(c => mkPt(c[1], c[0]));
+        track = pts.length > 30;
+      } else {
+        pts = feats.filter(x => geomOf(x) && x.geometry.type === 'Point').map(x => mkPt(x.geometry.coordinates[1], x.geometry.coordinates[0]));
+        f = feats[0];
+      }
+      const props = (f && f.properties) || {};
+      name = props.name || '';
+      ours = props.app === 'Area Calculator';
+      if (ours && Array.isArray(props.points)) {
+        // Our own file: restore the exact points with their GPS accuracy and marks.
+        pts = props.points.map(q => mkPt(q.lat, q.lng, q.gps_accuracy_m, q.mark));
+      }
+    } else {
+      const doc = new DOMParser().parseFromString(text, 'application/xml');
+      if (doc.getElementsByTagName('parsererror').length) throw new Error('not a valid file');
+      const tags = t => Array.from(doc.getElementsByTagNameNS('*', t));
+      const kmlCoords = el => el.textContent.trim().split(/\s+/).map(s => s.split(',').map(Number))
+        .filter(c => c.length >= 2 && isFinite(c[0]) && isFinite(c[1])).map(c => mkPt(c[1], c[0]));
+      if (doc.documentElement.localName === 'gpx') {
+        const ll = el => mkPt(+el.getAttribute('lat'), +el.getAttribute('lon'));
+        const trk = tags('trkpt'), rte = tags('rtept'), wpt = tags('wpt');
+        pts = (trk.length ? trk : rte.length ? rte : wpt).map(ll);
+        track = trk.length > 0;
+        const n = tags('name')[0]; name = n ? n.textContent : '';
+      } else {
+        const poly = tags('Polygon')[0], line = tags('LineString')[0], gx = tags('coord');
+        if (poly) pts = kmlCoords(tags('coordinates').find(c => poly.contains(c)));
+        else if (line) { pts = kmlCoords(line.getElementsByTagNameNS('*', 'coordinates')[0]); track = pts.length > 30; }
+        else if (gx.length) { pts = gx.map(c => c.textContent.trim().split(/\s+/).map(Number)).map(c => mkPt(c[1], c[0])); track = true; }
+        else pts = tags('Point').flatMap(p => kmlCoords(p.getElementsByTagNameNS('*', 'coordinates')[0]));
+        const n = tags('name')[0]; name = n ? n.textContent : '';
+      }
+    }
+    pts = pts.filter(p => isFinite(p.lat) && isFinite(p.lng));
+    // A closed ring repeats its first point at the end; we don't need that.
+    if (pts.length > 2 && pts[0].equals(pts[pts.length - 1], 1e-10)) pts.pop();
+    if (track) pts = simplifyTrack(pts);
+    return { pts, name };
+  }
+
+  async function openFile(file) {
+    try {
+      const { pts, name } = parseShapeFile(await file.text());
+      if (!pts.length) return toast('No points found in that file');
+      if (points.length && !confirm(`Replace the current shape with "${name || file.name}"?`)) return;
+      points = pts;
+      changed();
+      map.fitBounds(L.latLngBounds(points), { padding: [60, 60], maxZoom: 20 });
+      toast(`Opened ${name || file.name}: ${points.length} points`);
+    } catch (e) {
+      toast("Couldn't read that file (" + e.message + ')', 4000);
+    }
+  }
+
+  document.getElementById('btnMore').addEventListener('click', () => {
+    sheet.querySelectorAll('[data-act="saveGeo"],[data-act="saveKml"],[data-act="clear"]').forEach(b => { b.disabled = !points.length; });
+    sheet.querySelector('[data-act="open"]').disabled = !!walk;
+    sheet.hidden = false;
+  });
+  sheet.addEventListener('click', e => {
+    const act = e.target.closest('button') ? e.target.closest('button').dataset.act : (e.target === sheet ? 'close' : null);
+    if (!act) return;
+    sheet.hidden = true;
+    if (act === 'saveGeo') saveFile('geojson');
+    else if (act === 'saveKml') saveFile('kml');
+    else if (act === 'open') fileIn.click();
+    else if (act === 'clear' && confirm('Clear all points?')) { points = []; changed(); }
+  });
+  fileIn.addEventListener('change', () => {
+    const f = fileIn.files[0];
+    fileIn.value = '';
+    if (f) openFile(f);
+  });
+
 
   // ---------- Overview map (top right) ----------
   // When zoomed in close, a small map shows the wider area with a red box for
@@ -601,9 +901,20 @@
   redraw();
   updateMini();
   if (points.length >= 1 && !saved.view) map.fitBounds(L.latLngBounds(points), { padding: [60, 60] });
+  // The page was closed (or Android killed it) in the middle of a walk: offer to carry on.
+  if (saved.walk && saved.walk.track && saved.walk.track.length) {
+    const w = saved.walk, n = w.track.length;
+    if (confirm(`A walk was still in progress (${n} points, started ${fmtTime(Date.now() - w.startedAt)} ago). Continue it?\n\nOK = continue walking, Cancel = finish it now`)) {
+      beginWalk({ track: w.track.map(deser), walked: w.walked, maxFromStart: w.maxFromStart, startedAt: w.startedAt });
+      toast('Walk resumed', 3000);
+    } else {
+      walk = { track: w.track.map(deser), walked: w.walked, maxFromStart: w.maxFromStart, startedAt: w.startedAt };
+      finishWalk(false);
+    }
+  }
 
   // Expose for testing.
-  window.__areacalc = { geodesicArea, perimeter, selfIntersects, dist, simplifyTrack, get points() { return points; }, get walk() { return walk; } };
+  window.__areacalc = { geodesicArea, perimeter, selfIntersects, dist, simplifyTrack, parseShapeFile, toGeoJSON, toKML, get points() { return points; }, get walk() { return walk; } };
 })();
 </script>
 </body>

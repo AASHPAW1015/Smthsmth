@@ -5,9 +5,15 @@ A personal, phone-friendly web app: look at satellite imagery, drop points, get 
 - **Tap the map** to add corner points (point 1 is green). Drag a point to move it, tap a point to delete it.
 - **🚶 Walk** tracks you with GPS while you walk around a parcel, recording a point every few metres.
   When you get back near where you started, the loop closes by itself and shows the area (or tap **⏹️ Stop**).
-  GPS jitter is cleaned up into a few corner points you can drag to fine-tune.
-  Keep the screen on and the app open while walking: browsers pause GPS when the screen is off.
-- **📍 GPS pt** drops a single point where you're standing.
+  GPS jitter is cleaned up into a few corner points you can drag to fine-tune. Built for long walks (30 min+):
+  the screen is kept awake, GPS restarts itself if it goes quiet, the walk is saved after every point, and if the
+  page gets closed you're asked to continue where you left off.
+  Keep the app open on screen: browsers pause GPS when the screen is off or you switch apps.
+- **📌 Mark** puts a point exactly where you stand, instantly. During a walk, tap it at every corner:
+  marked corners are always kept, so straight sides come out perfectly straight.
+- **☰ More → Save to phone** writes a `.geojson` file to Downloads (8-decimal lat/lng ≈ 1 mm, plus each point's
+  GPS accuracy and marks). **Open a saved file** loads it back exactly. Also saves `.kml` for Google Earth, and
+  opens `.gpx` tracks from GPS logger apps.
 - Each side's **length is shown along the line** (feet with acres/ft², metres otherwise).
 - When zoomed in close, an **overview map** appears top-right with a red box showing where you are. Tap it to jump.
 - **🎯 Find me** centres the map on your location.
